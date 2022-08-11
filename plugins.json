@@ -1,0 +1,61 @@
+[
+    {
+        "iconUrl": "https://vedo.direttecommunity.online/templates/calciostreaming1/images/icons/apple-touch-icon.png",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 12732,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "Gian-Fr",
+            "Adippe",
+            "doGior",
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 6,
+        "internalName": "CalcioStreaming",
+        "description": "Live streams from the CalcioStreaming. Forked from the CalcioStreaming plugin in the dogior repo",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/CalcioStreaming.cs3",
+        "name": "CalcioStreaming"
+    },
+    {
+        "iconUrl": "https://raw.githubusercontent.com/doGior/doGiorsHadEnough/refs/heads/master/DaddyLive/live-streaming.png",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 11430,
+        "status": 1,
+        "authors": [
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 16,
+        "internalName": "DaddyLive",
+        "description": "Live TV from DaddyLive.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/DaddyLive.cs3",
+        "name": "DaddyLive"
+    },
+    {
+        "iconUrl": "https://logowiki.net/wp-content/uploads/imgp/Hattrick-Logo-1-5512.jpg",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 11296,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 9,
+        "internalName": "Hattrick",
+        "description": "Live streams from Hattrick.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/Hattrick.cs3",
+        "name": "Hattrick"
+    }
+]
