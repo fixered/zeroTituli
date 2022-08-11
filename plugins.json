@@ -1,0 +1,45 @@
+[
+    {
+        "iconUrl": "https://vedo.direttecommunity.online/templates/calciostreaming1/images/icons/apple-touch-icon.png",
+        "fileHash": "sha256-2fc7aa8676e529c1eba4646cc5dee803474f41f317c81f0c7b85d17995c83316",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 12732,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "Gian-Fr",
+            "Adippe",
+            "doGior",
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 6,
+        "internalName": "CalcioStreaming",
+        "description": "Live streams from the CalcioStreaming. Forked from the CalcioStreaming plugin in the dogior repo",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/CalcioStreaming.cs3",
+        "name": "CalcioStreaming"
+    },
+    {
+        "iconUrl": "https://logowiki.net/wp-content/uploads/imgp/Hattrick-Logo-1-5512.jpg",
+        "fileHash": "sha256-78d789a9ff141b9ee515257859f26ff56b358e374a17a3cd77a5cd79968ce6e2",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 29080,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 17,
+        "internalName": "Hattrick",
+        "description": "Live streams from Hattrick.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/Hattrick.cs3",
+        "name": "Hattrick"
+    }
+]
