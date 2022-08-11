@@ -1,0 +1,110 @@
+[
+    {
+        "iconUrl": "https://statics1.tcxru135mdqf.ru/img/fc/favicon_32.png",
+        "fileHash": "sha256-6ea336139ffdc5d43d0f25084065ff427e9650d4d2996574ea6ff6c1104d1ca5",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 85666,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 5,
+        "internalName": "FCTV33",
+        "description": "Partite delle squadre e delle competizioni principali da FCTV33.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/FCTV33.cs3",
+        "name": "FCTV33"
+    },
+    {
+        "iconUrl": "https://statics1.tcxru135mdqf.ru/img/fc/favicon_32.png",
+        "fileHash": "sha256-4c91a4228bf261f5cf69dfb0abc6b6baf6db097ba51d6c1934cad9f646274ab5",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 85906,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 2,
+        "internalName": "FCTV33Basket",
+        "description": "Basket da FCTV33: Serie A1, Serie A2, NBA e tutti gli altri eventi.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/FCTV33Basket.cs3",
+        "name": "FCTV33Basket"
+    },
+    {
+        "iconUrl": "https://logowiki.net/wp-content/uploads/imgp/Hattrick-Logo-1-5512.jpg",
+        "fileHash": "sha256-78b2fb13349e27723e1637ba201a377d84f23ed8703f378ee5614e97f6f7e23e",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 106349,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "fixered"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 27,
+        "internalName": "Hattrick",
+        "description": "Live streams from Hattrick.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/Hattrick.cs3",
+        "name": "Hattrick"
+    },
+    {
+        "iconUrl": "https://static3.mediasetplay.mediaset.it/static/images/mplay-logo-organization-v2.png",
+        "fileHash": "sha256-831ac04dcbefc332abfeb0cdc35bfcf5c100850a04dcec4058e7849db8436727",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 141286,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "fixered"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Documentary",
+            "Cartoon",
+            "Live"
+        ],
+        "version": 8,
+        "internalName": "MediasetInfinity",
+        "description": "Mediaset Infinity: catalogo, dirette TV e serie con le stagioni.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/MediasetInfinity.cs3",
+        "name": "MediasetInfinity"
+    },
+    {
+        "iconUrl": "https://streamingunity.cc/apple-touch-icon.png?v=2",
+        "fileHash": "sha256-ac3ac7c8e9afe6024df08865cece316f91d37be93b04df6a1396f88de0c22677",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/fixered/zeroTituli",
+        "fileSize": 122470,
+        "status": 1,
+        "language": "it",
+        "authors": [
+            "doGior",
+            "fixered"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "Movie",
+            "Documentary",
+            "Cartoon"
+        ],
+        "version": 3,
+        "internalName": "StreamingCommunity",
+        "description": "Film e serie da StreamingCommunity, con il dominio corrente trovato da solo.",
+        "url": "https://raw.githubusercontent.com/fixered/zeroTituli/builds/StreamingCommunity.cs3",
+        "name": "StreamingCommunity"
+    }
+]
