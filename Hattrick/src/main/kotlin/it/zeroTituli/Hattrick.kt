@@ -45,7 +45,6 @@ class Hattrick : MainAPI() {
             lists.add(HomePageList("Canali On Line", channelButtons.take(15), isHorizontalImages = false))
         }
 
-        // 2) Collect event rows - each row contains match info and buttons
         val eventRows = document.select("div.events div.row").drop(1).mapNotNull { row ->
             try {
                 // Get match title from game-name span
@@ -60,20 +59,21 @@ class Hattrick : MainAPI() {
                 val logo = row.selectFirst("img.mascot")?.attr("src") ?: ""
                 
                 // Get all stream buttons in this row
-                val buttons = row.select("button.btn a[href]")
-                    .filter { it.attr("href").contains(".htm") }
-                    .mapNotNull { a ->
-                        val href = a.attr("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                        val linkName = a.text().ifBlank { title }
-                        
-                        newLiveSearchResponse(
-                            "$title ${if (date.isNotBlank()) "— $date" else ""}", 
-                            fixUrl(href), 
-                            TvType.Live
-                        ) {
-                            this.posterUrl = if (logo.isNotBlank()) fixUrl(logo) else ""
-                        }
+                val buttons = row.select("button a[href]")
+                .filter { it.attr("href").contains(".htm") }
+                .mapNotNull { a ->
+                    val aChannel = a.text()
+                    val href = a.attr("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val linkName = a.text().ifBlank { title }
+                    
+                    newLiveSearchResponse(
+                        aChannel,
+                        fixUrl(href), 
+                        TvType.Live
+                    ) {
+                        this.posterUrl = if (logo.isNotBlank()) fixUrl(logo) else ""
                     }
+                }
                 
                 if (buttons.isEmpty()) return@mapNotNull null
                 HomePageList(title, buttons, isHorizontalImages = false)
