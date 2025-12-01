@@ -42,7 +42,7 @@ class Hattrick : MainAPI() {
                     .firstOrNull { it.isNotBlank() && !it.contains("histats") }
 
                 
-                newLiveSearchResponse(title, fixUrl(iframeLinkUrl), TvType.Live) {
+                newLiveSearchResponse(title, fixUrl(iframeLinkUrl ?: "" , TvType.Live) {
                     this.posterUrl = if (poster.isNotBlank()) fixUrl(poster) else ""
                 }
             }
