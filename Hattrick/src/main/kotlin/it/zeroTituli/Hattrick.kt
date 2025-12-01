@@ -30,6 +30,7 @@ class Hattrick : MainAPI() {
             val categoryName = it.select("div.details > a.game-name > span")!!.text()
             val shows = it.select("button.btn").map {
                 val href = it.selectFirst("a")!!.attr("href")
+                Log.d("Href", link)
                 val name = it.selectFirst("a")!!.text()
                 val posterUrl = fixUrl(sections.select("div.logos > img")!!.attr("src"))
                 newLiveSearchResponse(name, href, TvType.Live) {
@@ -109,7 +110,6 @@ class Hattrick : MainAPI() {
             } catch (e: Exception) {
                 null
             }
-            Log.d("Domain", domain)
         
             if (domain == null) return@mapNotNull null
         
