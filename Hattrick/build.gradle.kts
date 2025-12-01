@@ -7,7 +7,7 @@ cloudstream {
     // All of these properties are optional, you can safely remove them
 
      description = "Live streams from Hattrick."
-    authors = listOf("Gian-Fr","Adippe","doGior","fixered")
+    authors = listOf("fixered")
 
     /**
      * Status int as the following:

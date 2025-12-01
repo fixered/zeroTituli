@@ -11,125 +11,85 @@ import org.jsoup.nodes.Document
 
 class Hattrick : MainAPI() {
     override var lang = "it"
-    override var mainUrl = "https://www.hattrick.ws"
+    override var mainUrl = "https://hattrick.ws"
     override var name = "Hattrick"
     override val hasMainPage = true
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
-
-    private val cfKiller = CloudflareKiller()
-
-    private fun fixUrl(url: String): String {
-        if (url.isEmpty()) return url
-        return if (url.startsWith("http")) url else (mainUrl.trimEnd('/') + "/" + url.trimStart('/'))
-    }
+    val cfKiller = CloudflareKiller()
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(mainUrl).document
-        val lists = ArrayList<HomePageList>()
 
-        // 1) Collect channel buttons - they are inside <button><a>
-        val channelButtons = document.select("button.btn a[href]")
-            .filter { it.attr("href").contains(".htm") }
-            .mapNotNull { a ->
-                val href = a.attr("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val title = a.text().ifBlank { "Live Channel" }
-                val poster = a.closest("div.row")?.selectFirst("img.mascot")?.attr("src") ?: ""
+        val sections =
+            document.select("div.row")
 
-                val Iframedocument = app.get(href).document
-                val iframeLinkUrl = Iframedocument.select("iframe[src]")
-                    .map { it.attr("src") }
-                    .firstOrNull { it.isNotBlank() && !it.contains("histats") }
+        if (sections.isEmpty()) throw ErrorLoadingException()
 
-                
-                newLiveSearchResponse(title, fixUrl(iframeLinkUrl ?: "") , TvType.Live) {
-                    this.posterUrl = if (poster.isNotBlank()) fixUrl(poster) else ""
+        return newHomePageResponse(sections.mapNotNull { it ->
+            val categoryName = it.select("div.details > a.game-name > span")!!.text()
+            val shows = it.select("button.btn").map {
+                val href = it.selectFirst("a")!!.attr("href")
+                val name = it.selectFirst("a")!!.text()
+                val posterUrl = fixUrl(sections.select("div.logos > img")!!.attr("src"))
+                newLiveSearchResponse(name, href, TvType.Live) {
+                    this.posterUrl = posterUrl
                 }
             }
+            if (shows.isEmpty()) return@mapNotNull null
+            HomePageList(
+                categoryName,
+                shows,
+                isHorizontalImages = true
+            )
+        }, false)
 
-        if (channelButtons.isNotEmpty()) {
-            lists.add(HomePageList("Canali On Line", channelButtons, isHorizontalImages = false))
-        }
-
-        if (lists.isEmpty()) throw ErrorLoadingException("No content found")
-
-        return newHomePageResponse(lists, false)
     }
+
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        
-        val title = document.selectFirst("h1")?.text()
-            ?: document.selectFirst("title")?.text()
-            ?: name
-        
-        val poster = document.selectFirst("img.mascot")?.attr("src")
-            ?: document.selectFirst("meta[property=og:image]")?.attr("content")
-            ?: ""
-        
-        val description = document.selectFirst("p.date")?.text()
-            ?: document.selectFirst("meta[name=description]")?.attr("content") 
-            ?: ""
-
+        val posterUrl =
+            document.select("div.background-image.bg-image").attr("style").substringAfter("url(")
+                .substringBefore(");")
+        val infoBlock = document.select(".info-wrap")
+        val title = infoBlock.select("h1").text()
+        val description = infoBlock.select("div.info-span > span").toList().joinToString(" - ")
         return newLiveStreamLoadResponse(name = title, url = url, dataUrl = url) {
-            this.posterUrl = if (poster.isNotBlank()) fixUrl(poster) else ""
+            this.posterUrl = fixUrl(posterUrl)
             this.plot = description
         }
     }
 
     private fun getStreamUrl(document: Document): String? {
-        // Look for iframe src
-        val iframe = document.selectFirst("iframe")?.attr("src")
-        if (!iframe.isNullOrBlank() && !iframe.contains("histats")) return fixUrl(iframe)
+        val scripts = document.body().select("script")
+        val obfuscatedScript = scripts.findLast { it.data().contains("eval(") }
+        val url = obfuscatedScript?.let {
+            val data = getAndUnpack(it.data())
+//            Log.d("CalcioStreaming", data)
+            val sourceRegex = "(?<=src=\")([^\"]+)".toRegex()
+            val source = sourceRegex.find(data)?.value ?: return null
+            source
+        } ?: return null
 
-        // Look for obfuscated script
-        val scripts = document.select("script")
-        val obfuscated = scripts.findLast { 
-            it.data().contains("eval(") || it.data().contains("split")
-        }
-        
-        val data = obfuscated?.data()?.let {
-            try {
-                getAndUnpack(it)
-            } catch (e: Exception) {
-                null
-            }
-        }
-        
-        if (!data.isNullOrBlank()) {
-            // Look for src= patterns
-            val regex = """(?:src=["']|src:\s*["'])([^"']+)""".toRegex()
-            val match = regex.find(data)?.groupValues?.get(1)
-            if (!match.isNullOrBlank()) return fixUrl(match)
-        }
-        
-        return null
+        return url
     }
 
-    private suspend fun extractVideoStream(url: String, ref: String, depth: Int = 1): Pair<String, String>? {
+    private suspend fun extractVideoStream(url: String, ref: String, n: Int): Pair<String, String>? {
         if (url.toHttpUrlOrNull() == null) return null
-        if (depth > 10) return null
-        
-        try {
-            val doc = app.get(url, referer = ref).document
-            val streamUrl = getStreamUrl(doc)
-            
-            if (!streamUrl.isNullOrBlank()) {
-                val fixed = fixUrl(streamUrl)
-                // If it looks like a playable stream, return it
-                if (fixed.contains(".m3u8") || fixed.contains("playlist") || 
-                    fixed.contains(".mpd") || fixed.contains("/live/")) {
-                    return fixed to url
-                }
-                // Otherwise, follow it recursively
-                return extractVideoStream(fixed, url, depth + 1)
-            }
-        } catch (e: Exception) {
-            Log.e("Hattrick", "Error extracting stream: ${e.message}")
+        if (n > 10) return null
+
+        val doc = app.get(url).document
+        val link = doc.selectFirst("iframe")?.attr("src") ?: return null
+        val newPage = app.get(fixUrl(link), referer = ref).document
+        val streamUrl = getStreamUrl(newPage)
+        return if (newPage.select("script").size >= 6 && !streamUrl.isNullOrEmpty()) {
+            streamUrl to fixUrl(link)
+        } else {
+            extractVideoStream(url = link, ref = url, n = n + 1)
         }
-        
-        return null
     }
+
 
     override suspend fun loadLinks(
         data: String,
@@ -138,50 +98,54 @@ class Hattrick : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val links = mutableListOf<Pair<String, String>>()
 
-        // Try to find iframe
-        val iframeSrc = document.select("iframe")
-            .map { it.attr("src") }
-            .firstOrNull { it.isNotBlank() && !it.contains("histats") }
-
-        if (!iframeSrc.isNullOrBlank()) {
-            val resolved = extractVideoStream(fixUrl(iframeSrc), data, 1)
-            if (resolved != null) {
-                links.add(resolved)
-            } else {
-                links.add(fixUrl(iframeSrc) to data)
+        val links = document.select("iframe").mapNotNull { it ->
+            val lang = "it"
+            val url = it.attr("src")
+                
+            val domain = try {
+                val uri = java.net.URL(url)
+                "${uri.protocol}://${uri.host}"
+            } catch (e: Exception) {
+                null
             }
+        
+            if (domain == null) return@mapNotNull null
+        
+            val link = extractVideoStream(url, domain, 1)
+            if (link == null) return@mapNotNull null
+        
+            Link(lang, link.first, link.second)
         }
-
-        // If no iframe, try direct m3u8 in HTML
-        if (links.isEmpty()) {
-            val m3u8Regex = """(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""".toRegex()
-            val m3u8 = m3u8Regex.find(document.html())?.value
-            if (!m3u8.isNullOrBlank()) {
-                links.add(m3u8 to data)
-            }
-        }
-
-        // Emit extractor links
-        links.forEachIndexed { idx, (url, ref) ->
-            Log.d("Hattrick", "Adding link: $url")
+        links.map {
+            Log.d("Hattrick", it.toString())
             callback(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
-                    name = "Hattrick ${idx + 1}",
-                    url = url,
-                    referer = ref,
-                    quality = Qualities.Unknown.value,
-                    type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                )
+                    name = it.lang,
+                    url = it.url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.quality = 0
+                    this.referer = it.ref
+                }
             )
         }
-
-        return links.isNotEmpty()
+        return true
     }
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
-        return cfKiller
+        return object : Interceptor {
+            override fun intercept(chain: Interceptor.Chain): Response {
+                val response = cfKiller.intercept(chain)
+                return response
+            }
+        }
     }
+
+    data class Link(
+        val lang: String,
+        val url: String,
+        val ref: String
+    )
 }
