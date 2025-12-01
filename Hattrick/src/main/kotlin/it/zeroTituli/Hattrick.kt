@@ -30,7 +30,7 @@ class Hattrick : MainAPI() {
             val categoryName = it.select("div.details > a.game-name > span")!!.text()
             val shows = it.select("button.btn").map {
                 val href = it.selectFirst("a")!!.attr("href")
-                Log.d("Href", link)
+                Log.d("Href", href)
                 val name = it.selectFirst("a")!!.text()
                 val posterUrl = fixUrl(sections.select("div.logos > img")!!.attr("src"))
                 newLiveSearchResponse(name, href, TvType.Live) {
@@ -114,7 +114,6 @@ class Hattrick : MainAPI() {
             if (domain == null) return@mapNotNull null
         
             val link = extractVideoStream(url, domain, 1)
-            Log.d("Link", link)
             if (link == null) return@mapNotNull null
         
             Link(lang, link.first, link.second)
