@@ -59,7 +59,7 @@ class Hattrick : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val posterUrl = "https://logowiki.net/wp-content/uploads/imgp/Hattrick-Logo-1-5512.jpg"
         val title = url.substringAfterLast("/").substringBefore(".htm").replaceFirstChar { it.uppercase() }
-        val description = "Stream from hattrick.ws"
+        val description = "Stream from hattrick.ws v2"
         
         return newLiveStreamLoadResponse(name = title, url = url, dataUrl = url) {
             this.posterUrl = posterUrl
