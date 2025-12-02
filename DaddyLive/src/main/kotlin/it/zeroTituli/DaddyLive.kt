@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 
 class DaddyLive : MainAPI() {
     override var mainUrl = "https://daddyhd.com"
-    override var name = "DaddyLiveHD"
+    override var name = "DaddyLive"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
 
@@ -15,7 +15,6 @@ class DaddyLive : MainAPI() {
         Channel("877", "Zona DAZN"),
     )
 
-    // LISTA CANALI SKY
     private val skyChannels = listOf(
         Channel("870", "Sky Sport Calcio"),
         Channel("871", "Sky Calcio 1"),
