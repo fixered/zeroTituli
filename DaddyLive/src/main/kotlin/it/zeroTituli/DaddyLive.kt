@@ -40,7 +40,7 @@ class DaddyLive : MainAPI() {
             )
         }
 
-        return HomePageResponse(
+        return newHomePageResponse(
             listOf(
                 HomePageList("DAZN Channels", daznList),
                 HomePageList("Sky Channels", skyList)
@@ -70,14 +70,11 @@ class DaddyLive : MainAPI() {
         val channel = allChannels.find { it.id == channelId }
         val title = channel?.name ?: "Channel $channelId"
         
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            apiName = this.name,
-            dataUrl = url,
             type = TvType.Live
-        )
-    }
+    )
 
     override suspend fun loadLinks(
         data: String,
