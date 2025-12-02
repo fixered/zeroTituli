@@ -28,11 +28,10 @@ class Hattrick : MainAPI() {
 
         return newHomePageResponse(sections.mapNotNull { it ->
             val categoryName = it.select("div.details > a.game-name > span")!!.text()
-            val shows = it.select("button.btn").map {
-                val href = it.selectFirst("a")!!.attr("href")
-                Log.d("Href", href)
-                val name = it.selectFirst("a")!!.text()
-                val posterUrl = fixUrl(sections.select("div.logos > img")!!.attr("src"))
+            val shows = it.select("button.btn").map { btn ->
+                val href = btn.selectFirst("a")!!.attr("href")
+                val name = btn.selectFirst("a")!!.text()
+                val posterUrl = fixUrl(btn.select("div.logos > img")!!.attr("src"))
                 newLiveSearchResponse(name, href, TvType.Live) {
                     this.posterUrl = posterUrl
                 }
@@ -50,12 +49,10 @@ class Hattrick : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        val posterUrl =
-            document.select("div.background-image.bg-image").attr("style").substringAfter("url(")
-                .substringBefore(");")
-        val infoBlock = document.select(".info-wrap")
-        val title = infoBlock.select("h1").text()
-        val description = infoBlock.select("div.info-span > span").toList().joinToString(" - ")
+        val posterUrl = "https://logowiki.net/wp-content/uploads/imgp/Hattrick-Logo-1-5512.jpg"
+        val infoBlock = ""
+        val title = url
+        val description = "Stream from hattrick.ws"
         return newLiveStreamLoadResponse(name = title, url = url, dataUrl = url) {
             this.posterUrl = fixUrl(posterUrl)
             this.plot = description
@@ -100,10 +97,10 @@ class Hattrick : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        val links = document.select("iframe").mapNotNull { it ->
+        val links = document.select("iframe[src]").mapNotNull { iframe ->
             val lang = "it"
-            val url = it.attr("src")
-             Log.d("Url", url)   
+             val url = iframe.attr("src")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            Log.d("Url", url)   
             val domain = try {
                 val uri = java.net.URL(url)
                 "${uri.protocol}://${uri.host}"
