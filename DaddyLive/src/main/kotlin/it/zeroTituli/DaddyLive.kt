@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
 class DaddyLive : MainAPI() {
+
     override var mainUrl = "https://daddyhd.com"
     override var name = "DaddyLive"
     override val hasMainPage = true
@@ -23,18 +24,23 @@ class DaddyLive : MainAPI() {
         Channel("874", "Sky Calcio 4"),
     )
 
+    // -------------------------
+    // MAIN PAGE
+    // -------------------------
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val daznList = daznChannels.map { channel ->
             newLiveSearchResponse(
                 channel.name,
-                "$mainUrl/watch.php?id=${channel.id}"
+                "$mainUrl/watch.php?id=${channel.id}",
+                TvType.Live,
             )
         }
 
         val skyList = skyChannels.map { channel ->
             newLiveSearchResponse(
                 channel.name,
-                "$mainUrl/watch.php?id=${channel.id}"
+                "$mainUrl/watch.php?id=${channel.id}",
+                TvType.Live,
             )
         }
 
@@ -47,6 +53,9 @@ class DaddyLive : MainAPI() {
         )
     }
 
+    // -------------------------
+    // SEARCH
+    // -------------------------
     override suspend fun search(query: String): List<SearchResponse> {
         val allChannels = daznChannels + skyChannels
 
@@ -56,24 +65,32 @@ class DaddyLive : MainAPI() {
         }.map { channel ->
             newLiveSearchResponse(
                 channel.name,
-                "$mainUrl/watch.php?id=${channel.id}"
+                "$mainUrl/watch.php?id=${channel.id}",
+                TvType.Live,
             )
         }
     }
 
+    // -------------------------
+    // LOAD PAGE
+    // -------------------------
     override suspend fun load(url: String): LoadResponse {
         val channelId = url.substringAfter("id=")
         val allChannels = daznChannels + skyChannels
         val channel = allChannels.find { it.id == channelId }
+        val title = channel?.name ?: "Channel $channelId"
 
-        return LiveStreamLoadResponse(
-            name = channel?.name ?: "Channel $channelId",
+        return newLiveStreamLoadResponse(
+            name = title,
             url = url,
-            type = TvType.Live,
-            dataUrl = url
+            dataUrl = url,       // <- REQUIRED (prima mancava!)
+            type = TvType.Live
         )
     }
 
+    // -------------------------
+    // LOAD LINKS - Extract streams
+    // -------------------------
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -96,22 +113,20 @@ class DaddyLive : MainAPI() {
             try {
                 val playerUrl = "$mainUrl/$playerType/stream-$channelId.php"
                 val doc = app.get(playerUrl).document
-                val iframe = doc.selectFirst("iframe[src]")
-                val streamUrl = iframe?.attr("src")
+                val iframe = doc.selectFirst("iframe[src]")?.attr("src")
 
-                if (!streamUrl.isNullOrBlank()) {
+                if (!iframe.isNullOrBlank()) {
                     callback.invoke(
                         newExtractorLink(
-                            source = name,
+                            source = this.name,
                             name = "$name - $playerName",
-                            url = fixUrl(streamUrl),
+                            url = fixUrl(iframe),
+                            referer = playerUrl,
                             type = ExtractorLinkType.M3U8
                         )
                     )
                 }
-            } catch (e: Exception) {
-                // ignora player non disponibili
-            }
+            } catch (_: Exception) {}
         }
 
         return true
