@@ -7,9 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class DaddyLivePlugin: Plugin() {
     override fun load(context: Context) {
-        // All providers should be added in this manner
-        registerMainAPI(DaddyLiveTVProvider())
-        registerMainAPI(DaddyLiveScheduleProvider())
-        registerExtractorAPI(DaddyLiveExtractor())
+        registerMainAPI(DaddyLive())
     }
 }
