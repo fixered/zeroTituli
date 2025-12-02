@@ -115,13 +115,11 @@ class DaddyLive : MainAPI() {
                 
                 if (!streamUrl.isNullOrBlank()) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = this.name,
                             name = "$name - $playerName",
                             url = fixUrl(streamUrl),
-                            referer = mainUrl,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = streamUrl.contains(".m3u8")
+                            type = ExtractorLinkType.M3U8
                         )
                     )
                 }
