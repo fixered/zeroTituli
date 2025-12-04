@@ -1,5 +1,7 @@
 package it.zeroTituli
-
+import org.jsoup.nodes.Document
+import org.jsoup.Jsoup
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
@@ -30,7 +32,7 @@ class DaddyLive : MainAPI() {
                 val href = "$mainUrl/watch.php?id=${channel.id}"
                 val name =  channel.name
                 val posterUrl = "https://raw.githubusercontent.com/doGior/doGiorsHadEnough/refs/heads/master/DaddyLive/daddylive.jpg"
-                newLiveSearchResponse(name, href, TvType.Live) {
+                newLiveSearchResponse(name, href) {
                     this.posterUrl = "https://raw.githubusercontent.com/doGior/doGiorsHadEnough/refs/heads/master/DaddyLive/daddylive.jpg"
                 }
             }
@@ -61,7 +63,6 @@ class DaddyLive : MainAPI() {
         val obfuscatedScript = scripts.findLast { it.data().contains("eval(") }
         val url = obfuscatedScript?.let {
             val data = getAndUnpack(it.data())
-//            Log.d("CalcioStreaming", data)
             val sourceRegex = "(?<=src=\")([^\"]+)".toRegex()
             val source = sourceRegex.find(data)?.value ?: return null
             source
@@ -130,4 +131,10 @@ class DaddyLive : MainAPI() {
             }
         }
     }
+
+    data class Link(
+        val lang: String,
+        val url: String,
+        val ref: String
+    )
 }
