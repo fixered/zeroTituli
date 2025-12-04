@@ -1,134 +1,98 @@
 package it.zeroTituli
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
+import okhttp3.Interceptor
+import okhttp3.Response
+import org.jsoup.nodes.Document
 
 class DaddyLive : MainAPI() {
-
+    override var lang = "it"
     override var mainUrl = "https://daddyhd.com"
     override var name = "DaddyLive"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
+    private val cfKiller = CloudflareKiller()
 
     data class Channel(val id: String, val name: String)
 
-    private val daznChannels = listOf(
+    private val channels = listOf(
         Channel("877", "Zona DAZN"),
-    )
-
-    private val skyChannels = listOf(
         Channel("870", "Sky Sport Calcio"),
         Channel("871", "Sky Calcio 1"),
         Channel("872", "Sky Calcio 2"),
         Channel("873", "Sky Calcio 3"),
-        Channel("874", "Sky Calcio 4"),
+        Channel("874", "Sky Calcio 4")
     )
 
-    // -------------------------
-    // MAIN PAGE
-    // -------------------------
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val daznList = daznChannels.map { channel ->
-            newLiveSearchResponse(
-                channel.name,
-                "$mainUrl/watch.php?id=${channel.id}",
-                TvType.Live,
-            )
+        val shows = channels.map { channel ->
+            newLiveSearchResponse(channel.name, "$mainUrl/watch.php?id=${channel.id}", TvType.Live) {}
         }
-
-        val skyList = skyChannels.map { channel ->
-            newLiveSearchResponse(
-                channel.name,
-                "$mainUrl/watch.php?id=${channel.id}",
-                TvType.Live,
-            )
-        }
-
-        return newHomePageResponse(
-            listOf(
-                HomePageList("DAZN Channels", daznList),
-                HomePageList("Sky Channels", skyList)
-            ),
-            hasNext = false
-        )
+        return newHomePageResponse(listOf(
+            HomePageList("Live Channels", shows, isHorizontalImages = true)
+        ))
     }
 
-    // -------------------------
-    // SEARCH
-    // -------------------------
-    override suspend fun search(query: String): List<SearchResponse> {
-        val allChannels = daznChannels + skyChannels
-
-        return allChannels.filter {
-            it.name.contains(query, ignoreCase = true) ||
-                    it.id.contains(query, ignoreCase = true)
-        }.map { channel ->
-            newLiveSearchResponse(
-                channel.name,
-                "$mainUrl/watch.php?id=${channel.id}",
-                TvType.Live,
-            )
-        }
-    }
-
-    // -------------------------
-    // LOAD PAGE
-    // -------------------------
     override suspend fun load(url: String): LoadResponse {
-        val channelId = url.substringAfter("id=")
-        val allChannels = daznChannels + skyChannels
-        val channel = allChannels.find { it.id == channelId }
-        val title = channel?.name ?: "Channel $channelId"
+        val document = app.get(url).document
 
-        return newLiveStreamLoadResponse(
-            name = title,
-            url = url,
-            dataUrl = url,       // <- REQUIRED (prima mancava!)
-            type = TvType.Live
-        )
+        // Extract title
+        val title = document.selectFirst("h2")?.text() ?: "Live Stream"
+
+        // Extract iframe URLs for all players
+        val playerButtons = document.select("button.player-btn")
+        val players = playerButtons.mapNotNull { btn ->
+            val playerName = btn.attr("title")
+            val playerUrl = btn.attr("data-url")
+            if (playerUrl.isNotEmpty()) playerName to playerUrl else null
+        }.toMap()
+
+        return newLiveStreamLoadResponse(title, url, dataUrl = url) {
+            players.forEach { (name, link) ->
+                addLink(name, link)
+            }
+        }
     }
 
-    // -------------------------
-    // LOAD LINKS - Extract streams
-    // -------------------------
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val document = app.get(data).document
+        val buttons = document.select("button.player-btn")
 
-        val channelId = data.substringAfter("id=")
-
-        val players = listOf(
-            "stream" to "Player 1",
-            "cast" to "Player 2",
-            "watch" to "Player 3",
-            "plus" to "Player 4",
-            "casting" to "Player 5",
-            "player" to "Player 6"
-        )
-
-        players.forEach { (playerType, playerName) ->
-            try {
-                val playerUrl = "$mainUrl/$playerType/stream-$channelId.php"
-                val doc = app.get(playerUrl).document
-                val iframe = doc.selectFirst("iframe[src]")?.attr("src")
-
-                if (!iframe.isNullOrBlank()) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = "$name - $playerName",
-                            url = fixUrl(iframe),
-                            referer = playerUrl,
-                            type = ExtractorLinkType.M3U8
-                        )
-                    )
-                }
-            } catch (_: Exception) {}
+        buttons.forEach { btn ->
+            val playerName = btn.attr("title")
+            val playerUrl = btn.attr("data-url")
+            if (playerUrl.isNotEmpty()) {
+                val iframeDoc = app.get(playerUrl, referer = data).document
+                val iframeSrc = iframeDoc.selectFirst("iframe")?.attr("src") ?: playerUrl
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name = playerName,
+                        url = iframeSrc,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = data
+                    }
+                )
+            }
         }
 
         return true
+    }
+
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
+        return object : Interceptor {
+            override fun intercept(chain: Interceptor.Chain): Response {
+                return cfKiller.intercept(chain)
+            }
+        }
     }
 }
