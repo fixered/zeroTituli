@@ -105,7 +105,7 @@ class DaddyLive : MainAPI() {
                 java.net.URL(url).host
             } 
             catch (e: Exception) {
-                null
+                ""
             }
             val link = url
             if (link == null) return@mapNotNull null
