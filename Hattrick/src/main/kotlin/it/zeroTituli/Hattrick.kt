@@ -5,6 +5,15 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import java.net.URI
 
+import com.lagradost.api.Log
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.*
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Interceptor
+import okhttp3.Response
+import org.jsoup.nodes.Document
+
 class Hattrick : MainAPI() {
     override var mainUrl = "https://hattrick.ws"
     override var name = "Hattrick"
