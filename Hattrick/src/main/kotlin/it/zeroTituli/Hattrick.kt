@@ -1,136 +1,88 @@
-package it.zeroTituli
+package com.example
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
-import okhttp3.Interceptor
-import okhttp3.Response
+import org.jsoup.Jsoup
 
-class Hattrick : MainAPI() {
-    private var M3U8_URL = "https://raw.githubusercontent.com/fixered/htk/master/hattrickveloce.m3u8"
-    override var name = "Hattrick"
-    override val hasMainPage = true
+class HattrickPlugin : MainAPI() {
+    override var mainUrl = "https://hattrick.ws"
+    override var name = "Hattrick Sky Sport"
     override var lang = "it"
-    override val hasChromecastSupport = true
+    override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Live)
-    
-    private val cfKiller = CloudflareKiller()
-    private val LOGO = "https://www.tuttotech.net/wp-content/uploads/2020/08/NOW-TV-Sky-On-Demand-logo-2.png"
 
-    data class Channel(
-        val name: String,
-        val url: String,
-        val logo: String,
-        val groupTitle: String
+    private val logo = "https://resource-m.calcionapoli24.it/www/thumbs/1200x/1590651555_987.jpg"
+
+    // Regole per rinominare i canali
+    private val renameRules = listOf(
+        listOf("1", "uno") to "Sky Sport Uno",
+        listOf("calcio") to "Sky Sport Calcio",
+        listOf("mix") to "Sky Sport Mix",
+        listOf("max") to "Sky Sport Max",
+        listOf("arena") to "Sky Sport Arena",
+        listOf("24") to "Sky Sport 24",
+        listOf("tennis") to "Sky Sport Tennis",
+        listOf("motogp", "moto gp") to "Sky Sport MotoGP",
+        listOf("f1", "formula") to "Sky Sport Formula 1",
+        listOf("dazn") to "Dazn 1"
     )
 
-    private suspend fun parseM3U8Playlist(): List<Channel> {
-        val channels = mutableListOf<Channel>()
-        
-        try {
-            val response = app.get(M3U8_URL).text
-            val lines = response.split("\n")
-            
-            var currentName = ""
-            var currentLogo = LOGO
-            var currentGroup = "Canali Live"
-            
-            for (i in lines.indices) {
-                val line = lines[i].trim()
-                
-                // Parsing linea EXTINF
-                if (line.startsWith("#EXTINF:")) {
-                    // Estrai il nome del canale (dopo l'ultima virgola)
-                    currentName = line.substringAfterLast(",").trim()
-                    
-                    // Estrai tvg-logo se presente
-                    val logoMatch = """tvg-logo="([^"]+)"""".toRegex().find(line)
-                    if (logoMatch != null) {
-                        currentLogo = logoMatch.groupValues[1]
-                    }
-                    
-                    // Estrai group-title se presente
-                    val groupMatch = """group-title="([^"]+)"""".toRegex().find(line)
-                    if (groupMatch != null) {
-                        currentGroup = groupMatch.groupValues[1]
-                    }
-                }
-                // La linea successiva dovrebbe contenere l'URL
-                else if (line.isNotEmpty() && !line.startsWith("#") && currentName.isNotEmpty()) {
-                    channels.add(
-                        Channel(
-                            name = currentName,
-                            url = line,
-                            logo = currentLogo,
-                            groupTitle = currentGroup
-                        )
-                    )
-                    
-                    // Reset per il prossimo canale
-                    currentName = ""
-                    currentLogo = LOGO
-                    currentGroup = "Canali Live"
-                }
+    private fun normalizzaNomeCanale(nome: String): String {
+        val nomeLower = nome.lowercase()
+        for ((keys, nuovoNome) in renameRules) {
+            if (keys.any { it in nomeLower }) {
+                return nuovoNome
             }
-            
-            Log.d("Hattrick", "Caricati ${channels.size} canali da M3U8")
-        } catch (e: Exception) {
-            Log.e("Hattrick", "Errore nel parsing M3U8: ${e.message}")
         }
-        
-        return channels
+        return nome.trim()
     }
 
+    override val mainPage = mainPageOf("" to "Sky Sport")
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val channels = parseM3U8Playlist()
+        val canali = estraiCanali()
         
-        // Raggruppa i canali per gruppo (se necessario)
-        val groupedChannels = channels.groupBy { it.groupTitle }
-        
-        val homePageLists = groupedChannels.map { (groupName, channelList) ->
-            HomePageList(
-                name = groupName,
-                list = channelList.map { channel ->
-                    newLiveSearchResponse(channel.name, channel.url, TvType.Live) {
-                        this.posterUrl = channel.logo
-                    }
-                },
-                isHorizontalImages = true
+        val homePageList = canali.map { canale ->
+            LiveSearchResponse(
+                name = canale.nome,
+                url = canale.url,
+                apiName = this.name,
+                type = TvType.Live,
+                posterUrl = logo
             )
         }
 
-        return newHomePageResponse(homePageLists, hasNext = false)
+        return HomePageResponse(
+            listOf(HomePageList("Canali Live", homePageList)),
+            hasNext = false
+        )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val channels = parseM3U8Playlist()
-        
-        return channels.filter { 
-            it.name.contains(query, ignoreCase = true) 
-        }.map { channel ->
-            newLiveSearchResponse(channel.name, channel.url, TvType.Live) {
-                this.posterUrl = channel.logo
-            }
+        val canali = estraiCanali()
+        return canali.filter { 
+            it.nome.contains(query, ignoreCase = true) 
+        }.map { canale ->
+            LiveSearchResponse(
+                name = canale.nome,
+                url = canale.url,
+                apiName = this.name,
+                type = TvType.Live,
+                posterUrl = logo
+            )
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // L'URL contiene già il link diretto allo stream M3U8
-        val channelName = url.substringAfterLast("/")
-            .substringBefore("?")
-            .replace("index.fmp4.m3u8", "")
-            .replace("-", " ")
-            .trim()
-
-        return newLiveStreamLoadResponse(
-            name = channelName.ifEmpty { "Live Stream" },
+        val nomeCanale = estraiCanali().find { it.url == url }?.nome ?: "Sky Sport"
+        
+        return LiveStreamLoadResponse(
+            name = nomeCanale,
             url = url,
-            dataUrl = url
-        ) {
-            this.posterUrl = LOGO
-            this.plot = "Diretta streaming"
-        }
+            apiName = this.name,
+            dataUrl = url,
+            posterUrl = logo
+        )
     }
 
     override suspend fun loadLinks(
@@ -139,34 +91,114 @@ class Hattrick : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val iframeUrl = estraiIframe(data)
+        val streamUrl = costruisciStreamVeloce(iframeUrl)
         
-        // Il data è già l'URL diretto dello stream M3U8
-        Log.d("Hattrick", "Caricamento stream: $data")
-        
-        try {
-            callback(
+        if (streamUrl != null) {
+            callback.invoke(
                 ExtractorLink(
                     source = this.name,
-                    name = "Hattrick (Veloce)",
-                    url = data,
-                    referer = "https://planetary.lovecdn.ru/",
+                    name = "Hattrick Stream",
+                    url = streamUrl,
+                    referer = mainUrl,
                     quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.M3U8
+                    isM3u8 = true
                 )
             )
-            
             return true
+        }
+        return false
+    }
+
+    // Estrae la lista dei canali dalla pagina principale
+    private suspend fun estraiCanali(): List<Canale> {
+        val canali = mutableListOf<Canale>()
+        
+        try {
+            val doc = app.get(mainUrl).document
+            
+            doc.select("button").forEach { button ->
+                val link = button.selectFirst("a[href$=.htm]")
+                if (link != null) {
+                    val href = link.attr("href")
+                    val nome = normalizzaNomeCanale(link.text())
+                    val urlCompleto = if (href.startsWith("http")) href else "$mainUrl/$href"
+                    
+                    canali.add(Canale(nome, urlCompleto))
+                }
+            }
         } catch (e: Exception) {
-            Log.e("Hattrick", "Errore caricamento link: ${e.message}")
-            return false
+            e.printStackTrace()
+        }
+        
+        return canali
+    }
+
+    // Estrae l'URL dell'iframe dalla pagina del canale
+    private suspend fun estraiIframe(url: String): String? {
+        return try {
+            val doc = app.get(url).document
+            
+            // Cerca iframe con planetary.lovecdn.ru
+            doc.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.contains("planetary.lovecdn.ru") && src.contains("token=")) {
+                    return src
+                }
+            }
+            
+            // Cerca qualsiasi iframe con token
+            doc.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.contains("token=")) {
+                    return src
+                }
+            }
+            
+            // Cerca negli script per URL con token
+            doc.select("script").forEach { script ->
+                val scriptText = script.html()
+                val tokenPattern = """(https?://[^"'\s]+token=[^"'\s]+)""".toRegex()
+                val match = tokenPattern.find(scriptText)
+                if (match != null) {
+                    return match.value
+                }
+            }
+            
+            null
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
     }
 
-    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor {
-        return object : Interceptor {
-            override fun intercept(chain: Interceptor.Chain): Response {
-                return cfKiller.intercept(chain)
-            }
+    // Costruisce l'URL stream veloce da iframe
+    private fun costruisciStreamVeloce(iframeUrl: String?): String? {
+        if (iframeUrl == null) return null
+        
+        try {
+            val uri = java.net.URI(iframeUrl)
+            val query = uri.query ?: return null
+            
+            // Estrai token
+            val token = query.split("&")
+                .find { it.startsWith("token=") }
+                ?.substringAfter("=") ?: return null
+            
+            // Costruisci path base
+            val path = uri.path
+            val basePath = path.substringBeforeLast("/")
+            
+            // URL veloce (planetary.lovecdn.ru)
+            return "https://planetary.lovecdn.ru$basePath/index.fmp4.m3u8?token=$token"
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
         }
     }
+
+    data class Canale(
+        val nome: String,
+        val url: String
+    )
 }
