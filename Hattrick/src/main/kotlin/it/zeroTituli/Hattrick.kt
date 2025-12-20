@@ -4,7 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 
-class HattrickPlugin : MainAPI() {
+class Hattrick : MainAPI() {
     override var mainUrl = "https://hattrick.ws"
     override var name = "Hattrick Sky Sport"
     override var lang = "it"
