@@ -2,7 +2,6 @@ package it.zeroTituli
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.Jsoup
 
 class Hattrick : MainAPI() {
     override var mainUrl = "https://hattrick.ws"
@@ -43,17 +42,17 @@ class Hattrick : MainAPI() {
         val canali = estraiCanali()
         
         val homePageList = canali.map { canale ->
-            LiveSearchResponse(
+            newLiveSearchResponse(
                 name = canale.nome,
                 url = canale.url,
-                apiName = this.name,
-                type = TvType.Live,
-                posterUrl = logo
-            )
+                type = TvType.Live
+            ) {
+                this.posterUrl = logo
+            }
         }
 
-        return HomePageResponse(
-            listOf(HomePageList("Canali Live", homePageList)),
+        return newHomePageResponse(
+            list = HomePageList("Canali Live", homePageList),
             hasNext = false
         )
     }
@@ -63,26 +62,26 @@ class Hattrick : MainAPI() {
         return canali.filter { 
             it.nome.contains(query, ignoreCase = true) 
         }.map { canale ->
-            LiveSearchResponse(
+            newLiveSearchResponse(
                 name = canale.nome,
                 url = canale.url,
-                apiName = this.name,
-                type = TvType.Live,
-                posterUrl = logo
-            )
+                type = TvType.Live
+            ) {
+                this.posterUrl = logo
+            }
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val nomeCanale = estraiCanali().find { it.url == url }?.nome ?: "Sky Sport"
         
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             name = nomeCanale,
             url = url,
-            apiName = this.name,
-            dataUrl = url,
-            posterUrl = logo
-        )
+            dataUrl = url
+        ) {
+            this.posterUrl = logo
+        }
     }
 
     override suspend fun loadLinks(
@@ -96,13 +95,11 @@ class Hattrick : MainAPI() {
         
         if (streamUrl != null) {
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
                     name = "Hattrick Stream",
                     url = streamUrl,
-                    referer = mainUrl,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = true
+                    type = ExtractorLinkType.M3U8
                 )
             )
             return true
