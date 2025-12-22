@@ -15,7 +15,7 @@ class Hattrick : MainAPI() {
     override val supportedTypes = setOf(TvType.Live)
 
     // URL del file M3U8 su GitHub
-    private val m3u8Url = "https://raw.githubusercontent.com/USERNAME/REPO/main/hattrick.m3u8"
+    private val m3u8Url = "https://raw.githubusercontent.com/fixered/htk/main/hattrick.m3u8"
 
     // Mappa canali: nome normalizzato -> stream URL
     private var channelStreams = mutableMapOf<String, String>()
@@ -136,8 +136,10 @@ class Hattrick : MainAPI() {
 
     private suspend fun loadM3U8Streams() {
         try {
-            val response = app.get(m3u8Url).text
-            val lines = response.lines()
+            // Usa app.get().text invece di app.get().text direttamente
+            val response = app.get(m3u8Url)
+            val content = response.body.string()
+            val lines = content.lines()
             
             var currentName: String? = null
             
