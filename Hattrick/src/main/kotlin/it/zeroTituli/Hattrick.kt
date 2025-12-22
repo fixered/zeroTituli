@@ -136,9 +136,8 @@ class Hattrick : MainAPI() {
 
     private suspend fun loadM3U8Streams() {
         try {
-            // Usa app.get().text invece di app.get().text direttamente
-            val response = app.get(m3u8Url)
-            val content = response.body.string()
+            // Usa .document.text() che è stabile
+            val content = app.get(m3u8Url).document.text()
             val lines = content.lines()
             
             var currentName: String? = null
