@@ -96,7 +96,7 @@ class Hattrick : MainAPI() {
     ): Boolean {
         val ev = decodeEvent(data)
         var any = false
-        ev.channels.apmap { ch ->
+        ev.channels.amap { ch ->
             val link = runCatching { resolveChannel(ch) }.getOrNull()
             if (link != null) {
                 callback(link)
