@@ -157,8 +157,9 @@ class Hattrick : MainAPI() {
     private suspend fun resolveChannel(ch: Channel): ExtractorLink? {
         val headers = mapOf("User-Agent" to ua)
         val html = app.get(ch.url, headers = headers, referer = "$mainUrl/").text
-        val iframeSrc = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        val rawIframe = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
             .find(html)?.groupValues?.getOrNull(1)?.trim() ?: return null
+        val iframeSrc = normalizeUrl(rawIframe, ch.url)
 
         val lower = iframeSrc.lowercase()
         return when {
@@ -167,6 +168,18 @@ class Hattrick : MainAPI() {
             lower.contains("lovetier.bz") -> resolveLovetier(iframeSrc, ch.name, ch.url)
             lower.contains("embed.php") -> null // bet365 dinamico, non gestibile headless
             else -> null
+        }
+    }
+
+    private fun normalizeUrl(url: String, base: String): String {
+        return when {
+            url.startsWith("http://") || url.startsWith("https://") -> url
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> {
+                val baseHost = Regex("""https?://[^/]+""").find(base)?.value ?: return url
+                "$baseHost$url"
+            }
+            else -> url
         }
     }
 
@@ -202,7 +215,7 @@ class Hattrick : MainAPI() {
             }.getOrNull() ?: continue
 
             val path = if (serverKey == "top1/cdn") "top1/cdn" else serverKey
-            val m3u8 = "https://$host/proxy/$path/$key/mono.css"
+            val m3u8 = "https://$host/proxy/$path/$key/mono.m3u8"
 
             return newExtractorLink(
                 source = this.name,
