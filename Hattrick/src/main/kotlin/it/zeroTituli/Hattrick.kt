@@ -52,17 +52,63 @@ class Hattrick : MainAPI() {
     // ============= MAIN PAGE =============
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val events = fetchEvents()
-        val featured = events.filter { it.channels.any { c -> isTopBlockChannel(c) } }
-            .sortedBy { it.timestamp }
+        val raw = fetchEvents()
+        // Re-classify all events via inferSport on title+league (data-sport del sito è spesso sbagliato)
+        val events = raw.map { ev ->
+            ev.copy(sport = inferSport("${ev.title} ${ev.league}"))
+        }.sortedBy { if (it.timestamp > 0L) it.timestamp else Long.MAX_VALUE }
+
         val sections = mutableListOf<HomePageList>()
+
+        // ⭐ In Evidenza (match top-block con stream funzionanti)
+        val featured = events.filter { it.channels.any { c -> isTopBlockChannel(c) } }
         if (featured.isNotEmpty()) {
             sections += HomePageList("⭐ In Evidenza", featured.map { toSearchResponse(it) })
         }
+
+        // Day boundaries (Europe/Rome)
+        val tz = TimeZone.getTimeZone("Europe/Rome")
+        val cal = java.util.Calendar.getInstance(tz).apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val todayStart = cal.timeInMillis / 1000L
+        val tomorrowStart = todayStart + 86400L
+        val dayAfterStart = tomorrowStart + 86400L
+        val nowSec = System.currentTimeMillis() / 1000L
+
+        // 🔴 Live Ora (inizio negli ultimi 3h)
+        val live = events.filter {
+            it.timestamp in (nowSec - 10_800L)..nowSec
+        }
+        if (live.isNotEmpty()) {
+            sections += HomePageList("🔴 Live Ora", live.map { toSearchResponse(it) })
+        }
+
+        // ⏰ Prossime (oggi, dopo adesso)
+        val upcomingToday = events.filter {
+            it.timestamp in (nowSec + 1L)..(tomorrowStart - 1L)
+        }
+        if (upcomingToday.isNotEmpty()) {
+            sections += HomePageList("⏰ Prossime · Oggi", upcomingToday.map { toSearchResponse(it) })
+        }
+
+        // 📅 Domani
+        val tomorrow = events.filter {
+            it.timestamp in tomorrowStart..(dayAfterStart - 1L)
+        }
+        if (tomorrow.isNotEmpty()) {
+            sections += HomePageList("📅 Domani", tomorrow.map { toSearchResponse(it) })
+        }
+
+        // Sport sections (classificazione corretta)
         sportSections.forEach { (key, label) ->
             val items = events.filter { it.sport == key }.map { toSearchResponse(it) }
             if (items.isNotEmpty()) sections += HomePageList(label, items)
         }
+
         return newHomePageResponse(sections, false)
     }
 
@@ -76,7 +122,7 @@ class Hattrick : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val ev = decodeEvent(url)
-        val time = formatTime(ev.timestamp)
+        val time = formatWhen(ev.timestamp)
         val plotLine = buildString {
             if (ev.league.isNotBlank()) append(ev.league).append(" • ")
             if (time.isNotBlank()) append(time)
@@ -224,15 +270,20 @@ class Hattrick : MainAPI() {
         } catch (_: Exception) { 0L }
     }
 
-    private fun inferSport(league: String): String {
-        val l = league.lowercase()
+    private fun inferSport(text: String): String {
+        val l = " ${text.lowercase()} "
         return when {
-            l.contains("nba") || l.contains("basket") || l.contains("ncaa") -> "basketball"
-            l.contains("tennis") || l.contains("atp") || l.contains("wta") -> "tennis"
-            l.contains("mma") || l.contains("ufc") || l.contains("boxe") || l.contains("boxing") -> "mma"
-            l.contains("hockey") || l.contains("nhl") -> "hockey"
-            l.contains("handball") || l.contains("pallamano") -> "handball"
-            l.contains("snooker") -> "snooker"
+            l.contains("tennis") || l.contains(" atp ") || l.contains(" wta ") ||
+                l.contains("roland garros") || l.contains("wimbledon") || l.contains("us open") ||
+                l.contains("australian open") -> "tennis"
+            l.contains("basket") || l.contains(" nba ") || l.contains("ncaa") ||
+                l.contains("euroleague") || l.contains("eurolega") || l.contains("lba ") -> "basketball"
+            l.contains("hockey") || l.contains(" nhl ") || l.contains(" khl ") ||
+                l.contains("ice hockey") -> "hockey"
+            l.contains("handball") || l.contains("pallamano") || l.contains(" ehf ") -> "handball"
+            l.contains(" mma ") || l.contains(" ufc ") || l.contains("boxing") ||
+                l.contains(" boxe") || l.contains("wrestling") || l.contains(" wwe ") -> "mma"
+            l.contains("snooker") || l.contains("biliardo") -> "snooker"
             else -> "football"
         }
     }
@@ -248,11 +299,11 @@ class Hattrick : MainAPI() {
         c.url.contains("htsport.org") && c.url.endsWith(".htm")
 
     private fun toSearchResponse(ev: Event): LiveSearchResponse {
-        val time = formatTime(ev.timestamp)
+        val whenStr = formatWhen(ev.timestamp)
         val meta = when {
-            ev.league.isNotBlank() && time.isNotBlank() -> "$time · ${ev.league}"
+            ev.league.isNotBlank() && whenStr.isNotBlank() -> "$whenStr · ${ev.league}"
             ev.league.isNotBlank() -> ev.league
-            else -> time
+            else -> whenStr
         }
         val label = if (meta.isNotBlank()) "${ev.title}\n$meta" else ev.title
         return newLiveSearchResponse(
@@ -264,8 +315,29 @@ class Hattrick : MainAPI() {
         }
     }
 
-    private fun formatTime(ts: Long): String =
-        if (ts > 0L) timeFmt.format(Date(ts * 1000L)) else ""
+    private fun formatWhen(ts: Long): String {
+        if (ts <= 0L) return ""
+        val tz = TimeZone.getTimeZone("Europe/Rome")
+        val cal = java.util.Calendar.getInstance(tz).apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val todayStart = cal.timeInMillis / 1000L
+        val tomorrowStart = todayStart + 86400L
+        val dayAfterStart = tomorrowStart + 86400L
+        val time = timeFmt.format(Date(ts * 1000L))
+        return when {
+            ts < todayStart -> "Ieri $time"
+            ts < tomorrowStart -> time
+            ts < dayAfterStart -> "Domani $time"
+            else -> {
+                val df = SimpleDateFormat("E d/M HH:mm", Locale.ITALY).apply { timeZone = tz }
+                df.format(Date(ts * 1000L))
+            }
+        }
+    }
 
     // ============= STREAM RESOLVERS =============
 
