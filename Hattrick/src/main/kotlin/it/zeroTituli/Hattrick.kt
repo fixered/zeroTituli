@@ -28,12 +28,6 @@ class Hattrick : MainAPI() {
         "snooker" to "🎱 Snooker"
     )
 
-    private val tigerLookupHosts = listOf(
-        "chevy.tigertestxtg.sbs",
-        "chevy.enviromentalanimal.horse",
-        "chevy.soyspace.cyou"
-    )
-
     data class Channel(val name: String, val url: String)
 
     data class Event(
@@ -41,7 +35,8 @@ class Hattrick : MainAPI() {
         val sport: String,
         val league: String,
         val timestamp: Long,
-        val channels: List<Channel>
+        val channels: List<Channel>,
+        val logo: String
     )
 
     @Volatile private var eventsCache: List<Event>? = null
@@ -58,9 +53,15 @@ class Hattrick : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val events = fetchEvents()
-        val sections = sportSections.mapNotNull { (key, label) ->
+        val featured = events.filter { it.channels.any { c -> isTopBlockChannel(c) } }
+            .sortedBy { it.timestamp }
+        val sections = mutableListOf<HomePageList>()
+        if (featured.isNotEmpty()) {
+            sections += HomePageList("⭐ In Evidenza", featured.map { toSearchResponse(it) })
+        }
+        sportSections.forEach { (key, label) ->
             val items = events.filter { it.sport == key }.map { toSearchResponse(it) }
-            if (items.isEmpty()) null else HomePageList(label, items)
+            if (items.isNotEmpty()) sections += HomePageList(label, items)
         }
         return newHomePageResponse(sections, false)
     }
@@ -69,8 +70,7 @@ class Hattrick : MainAPI() {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
         return fetchEvents().filter {
-            it.title.contains(q, ignoreCase = true) ||
-                it.league.contains(q, ignoreCase = true)
+            it.title.contains(q, ignoreCase = true) || it.league.contains(q, ignoreCase = true)
         }.map { toSearchResponse(it) }
     }
 
@@ -80,11 +80,12 @@ class Hattrick : MainAPI() {
         val plotLine = buildString {
             if (ev.league.isNotBlank()) append(ev.league).append(" • ")
             if (time.isNotBlank()) append(time)
-            append("\n${ev.channels.size} streams disponibili:\n")
+            append("\n\nCanali disponibili:\n")
             ev.channels.forEachIndexed { i, c -> append("${i + 1}. ${c.name}\n") }
         }
         return newLiveStreamLoadResponse(name = ev.title, url = url, dataUrl = url) {
             this.plot = plotLine
+            if (ev.logo.isNotBlank()) this.posterUrl = ev.logo
         }
     }
 
@@ -113,7 +114,35 @@ class Hattrick : MainAPI() {
         eventsCache?.let { if (now - cacheTime < cacheTtlMs) return it }
 
         val doc = app.get("$mainUrl/", headers = mapOf("User-Agent" to ua)).document
-        val parsed = doc.select("div.event").mapNotNull { el ->
+
+        // Top block: div.row containing a.game-name (featured matches)
+        val topEvents = mutableListOf<Event>()
+        doc.select("a.game-name").forEach { gameName ->
+            val row = gameName.closest(".row") ?: return@forEach
+            val title = gameName.selectFirst("span")?.text()?.trim().orEmpty()
+            if (title.isBlank()) return@forEach
+            val dateText = row.selectFirst("p.date")?.text()?.trim().orEmpty()
+            val (time, league) = splitDateText(dateText)
+            val logo = row.selectFirst("img.mascot")?.attr("src").orEmpty()
+            val channels = row.select("button.btn a[href]").mapNotNull { a ->
+                val href = a.attr("href").trim()
+                val label = a.text().trim()
+                if (href.isBlank() || label.isBlank()) null
+                else Channel(label, resolveRelative(href))
+            }
+            if (channels.isEmpty()) return@forEach
+            topEvents += Event(
+                title = title,
+                sport = inferSport(league),
+                league = league,
+                timestamp = parseTimeToTs(time),
+                channels = channels,
+                logo = logo
+            )
+        }
+
+        // Bottom block: div.event with data-sport
+        val bottomEvents = doc.select("div.event").mapNotNull { el ->
             val sport = el.attr("data-sport").lowercase().ifBlank { return@mapNotNull null }
             val title = el.selectFirst("div.event-title")?.text()?.trim().orEmpty()
             if (title.isBlank()) return@mapNotNull null
@@ -123,16 +152,100 @@ class Hattrick : MainAPI() {
                 val href = a.attr("href").trim()
                 val chName = a.text().trim()
                 if (href.isBlank() || chName.isBlank()) null
-                else Channel(chName, href)
+                else Channel(chName, resolveRelative(href))
             }
             if (channels.isEmpty()) null
-            else Event(title, sport, league, ts, channels)
+            else Event(title, sport, league, ts, channels, "")
         }
 
-        eventsCache = parsed
+        val merged = mergeEvents(topEvents, bottomEvents)
+        eventsCache = merged
         cacheTime = now
-        return parsed
+        return merged
     }
+
+    private fun mergeEvents(top: List<Event>, bottom: List<Event>): List<Event> {
+        val byKey = mutableMapOf<String, Event>()
+        bottom.forEach { ev -> byKey[eventKey(ev)] = ev }
+        top.forEach { t ->
+            val key = eventKey(t)
+            val existing = byKey[key]
+            if (existing != null) {
+                val mergedCh = (t.channels + existing.channels)
+                    .distinctBy { it.url }
+                byKey[key] = existing.copy(
+                    channels = mergedCh,
+                    logo = existing.logo.ifBlank { t.logo }
+                )
+            } else {
+                byKey[key] = t
+            }
+        }
+        return byKey.values.sortedWith(compareBy({ it.timestamp }, { it.title }))
+    }
+
+    private fun eventKey(ev: Event): String {
+        val teams = normalizeTitle(ev.title)
+        return "${ev.timestamp / 60}|$teams"
+    }
+
+    private fun normalizeTitle(title: String): String {
+        val normalized = title.lowercase()
+            .replace("·", " - ")
+            .replace(Regex("\\s+vs\\s+"), " - ")
+            .replace(Regex("[^a-z0-9 -]"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val parts = normalized.split(" - ").map { it.trim() }.filter { it.isNotEmpty() }
+        return parts.sorted().joinToString("|")
+    }
+
+    private fun splitDateText(s: String): Pair<String, String> {
+        val cleaned = s.replace("·", "|").replace("•", "|")
+        val parts = cleaned.split("|").map { it.trim() }.filter { it.isNotEmpty() }
+        val time = parts.firstOrNull { it.matches(Regex("\\d{1,2}:\\d{2}")) }.orEmpty()
+        val league = parts.firstOrNull { !it.matches(Regex("\\d{1,2}:\\d{2}")) }.orEmpty()
+        return time to league
+    }
+
+    private fun parseTimeToTs(timeHHmm: String): Long {
+        if (!timeHHmm.matches(Regex("\\d{1,2}:\\d{2}"))) return 0L
+        return try {
+            val fmt = SimpleDateFormat("HH:mm", Locale.ITALY).apply {
+                timeZone = TimeZone.getTimeZone("Europe/Rome")
+            }
+            val today = SimpleDateFormat("yyyy-MM-dd", Locale.ITALY).apply {
+                timeZone = TimeZone.getTimeZone("Europe/Rome")
+            }.format(Date())
+            val full = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ITALY).apply {
+                timeZone = TimeZone.getTimeZone("Europe/Rome")
+            }
+            (full.parse("$today $timeHHmm")?.time ?: 0L) / 1000L
+        } catch (_: Exception) { 0L }
+    }
+
+    private fun inferSport(league: String): String {
+        val l = league.lowercase()
+        return when {
+            l.contains("nba") || l.contains("basket") || l.contains("ncaa") -> "basketball"
+            l.contains("tennis") || l.contains("atp") || l.contains("wta") -> "tennis"
+            l.contains("mma") || l.contains("ufc") || l.contains("boxe") || l.contains("boxing") -> "mma"
+            l.contains("hockey") || l.contains("nhl") -> "hockey"
+            l.contains("handball") || l.contains("pallamano") -> "handball"
+            l.contains("snooker") -> "snooker"
+            else -> "football"
+        }
+    }
+
+    private fun resolveRelative(href: String): String = when {
+        href.startsWith("http://") || href.startsWith("https://") -> href
+        href.startsWith("//") -> "https:$href"
+        href.startsWith("/") -> "$mainUrl$href"
+        else -> "$mainUrl/$href"
+    }
+
+    private fun isTopBlockChannel(c: Channel): Boolean =
+        c.url.contains("htsport.org") && c.url.endsWith(".htm")
 
     private fun toSearchResponse(ev: Event): LiveSearchResponse {
         val time = formatTime(ev.timestamp)
@@ -146,7 +259,9 @@ class Hattrick : MainAPI() {
             name = label,
             url = encodeEvent(ev),
             type = TvType.Live
-        ) {}
+        ) {
+            if (ev.logo.isNotBlank()) this.posterUrl = ev.logo
+        }
     }
 
     private fun formatTime(ts: Long): String =
@@ -155,83 +270,82 @@ class Hattrick : MainAPI() {
     // ============= STREAM RESOLVERS =============
 
     private suspend fun resolveChannel(ch: Channel): ExtractorLink? {
+        // Both .htm (htsport.org) and .php (abcsport.top) contain an iframe pointing to a player
         val headers = mapOf("User-Agent" to ua)
         val html = app.get(ch.url, headers = headers, referer = "$mainUrl/").text
         val rawIframe = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
             .find(html)?.groupValues?.getOrNull(1)?.trim() ?: return null
         val iframeSrc = normalizeUrl(rawIframe, ch.url)
+        return dispatch(iframeSrc, ch.name, ch.url)
+    }
 
-        val lower = iframeSrc.lowercase()
+    private suspend fun dispatch(url: String, chName: String, refererUrl: String): ExtractorLink? {
+        val lower = url.lowercase()
         return when {
-            lower.contains("maxsport.php") -> resolveTigerMaxsport(iframeSrc, ch.name)
-            lower.contains("popcdn.day") -> resolvePopcdn(iframeSrc, ch.name, ch.url)
-            lower.contains("lovetier.bz") -> resolveLovetier(iframeSrc, ch.name, ch.url)
-            lower.contains("embed.php") -> null // bet365 dinamico, non gestibile headless
+            lower.contains("mediahosting.space") -> resolveMediahosting(url, chName)
+            lower.contains("staypoor.net") -> resolveStaypoor(url, chName)
+            lower.contains("sportssonline") || lower.contains("expectdynm") ->
+                resolveSportssonline(url, chName, refererUrl)
+            lower.contains("freeshot.live") -> resolveFreeshot(url, chName)
+            lower.contains("popcdn.day") -> resolvePopcdn(url, chName, refererUrl)
+            lower.contains("lovetier.bz") -> resolveLovetier(url, chName, refererUrl)
+            // tigertestxtg.sbs + liveon4.zip: stream AES-128 con key obfuscata → ExoPlayer fallisce
+            lower.contains("tigertestxtg.sbs") || lower.contains("maxsport.php") -> null
+            lower.contains("liveon4.zip") || lower.contains("antena.php") -> null
+            lower.contains("embed.php") -> null // bet365
             else -> null
         }
     }
 
-    private fun normalizeUrl(url: String, base: String): String {
-        return when {
-            url.startsWith("http://") || url.startsWith("https://") -> url
-            url.startsWith("//") -> "https:$url"
-            url.startsWith("/") -> {
-                val baseHost = Regex("""https?://[^/]+""").find(base)?.value ?: return url
-                "$baseHost$url"
-            }
-            else -> url
-        }
+    // mediahosting.space/embed/player?stream=N
+    private suspend fun resolveMediahosting(url: String, chName: String): ExtractorLink? {
+        val headers = mapOf("User-Agent" to ua)
+        val html = app.get(url, headers = headers, referer = "$mainUrl/").text
+        val m3u8 = Regex("""https?:\\?/\\?/[a-zA-Z0-9.\-:]+/stream/[^"\\]+\.m3u8[^"\\]*""")
+            .find(html)?.value?.replace("\\/", "/") ?: return null
+        return buildM3u8Link(chName, m3u8, "https://mediahosting.space/")
     }
 
-    // maxsport.php?id=KEY on tigertestxtg.sbs (or mirrors)
-    private suspend fun resolveTigerMaxsport(iframeUrl: String, chName: String): ExtractorLink? {
-        val key = Regex("""[?&]id=([^&#]+)""").find(iframeUrl)?.groupValues?.getOrNull(1)
-            ?: return null
-        val iframeHost = Regex("""https?://([^/]+)""").find(iframeUrl)?.groupValues?.getOrNull(1)
-            ?: "tigertestxtg.sbs"
-        val playerReferer = "https://$iframeHost/"
+    // staypoor.net/embed/HASH → direct m3u8 in HTML
+    private suspend fun resolveStaypoor(url: String, chName: String): ExtractorLink? {
+        val host = hostOf(url) ?: "staypoor.net"
+        val headers = mapOf("User-Agent" to ua)
+        val html = app.get(url, headers = headers, referer = "$mainUrl/").text
+        val m3u8 = Regex("""https?://[a-zA-Z0-9.\-:]+/hls/[^"'\s]+\.m3u8[^"'\s]*""")
+            .find(html)?.value ?: return null
+        return buildM3u8Link(chName, m3u8, "https://$host/")
+    }
 
-        val lookupHosts = buildList {
-            add("chevy.$iframeHost")
-            tigerLookupHosts.forEach { if (!contains(it)) add(it) }
-        }
-
-        val headers = mapOf(
-            "User-Agent" to ua,
-            "Origin" to playerReferer.trimEnd('/'),
-            "Accept" to "application/json, text/plain, */*"
-        )
-
-        for (host in lookupHosts) {
-            val serverKey = runCatching {
-                val resp = app.get(
-                    "https://$host/server_lookup?channel_id=$key",
-                    headers = headers,
-                    referer = playerReferer,
-                    timeout = 8L
-                )
-                Regex(""""server_key"\s*:\s*"([^"]+)"""")
-                    .find(resp.text)?.groupValues?.getOrNull(1)
-            }.getOrNull() ?: continue
-
-            val path = if (serverKey == "top1/cdn") "top1/cdn" else serverKey
-            val m3u8 = "https://$host/proxy/$path/$key/mono.m3u8"
-
-            return newExtractorLink(
-                source = this.name,
-                name = chName,
-                url = m3u8,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = playerReferer
-                this.quality = Qualities.Unknown.value
-                this.headers = mapOf(
-                    "User-Agent" to ua,
-                    "Origin" to playerReferer.trimEnd('/')
-                )
+    // sportssonline.click/channels/hd/hdN.php → iframe expectdynm.net/embed/HASH → m3u8
+    private suspend fun resolveSportssonline(url: String, chName: String, referer: String): ExtractorLink? {
+        val headers = mapOf("User-Agent" to ua)
+        var current = url
+        // Follow iframe up to 3 levels
+        repeat(3) {
+            val html = app.get(current, headers = headers, referer = referer).text
+            val direct = Regex("""https?://[a-zA-Z0-9.\-:]+/hls/[^"'\s]+\.m3u8[^"'\s]*""")
+                .find(html)?.value
+            if (direct != null) {
+                val host = hostOf(current) ?: "sportssonline.click"
+                return buildM3u8Link(chName, direct, "https://$host/")
             }
+            val inner = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1) ?: return null
+            current = normalizeUrl(inner, current)
         }
         return null
+    }
+
+    // freeshot.live/embed/NAME.php → iframe popcdn.day → lovetier
+    private suspend fun resolveFreeshot(url: String, chName: String): ExtractorLink? {
+        val headers = mapOf("User-Agent" to ua)
+        val html = app.get(url, headers = headers, referer = "$mainUrl/").text
+        val inner = Regex("""<iframe[^>]+src=["']([^"']+popcdn\.day[^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.getOrNull(1)
+            ?: Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .find(html)?.groupValues?.getOrNull(1) ?: return null
+        val iframeUrl = normalizeUrl(inner, url)
+        return dispatch(iframeUrl, chName, url)
     }
 
     // popcdn.day/go.php?stream=KEY → iframe lovetier.bz/player/KEY
@@ -240,29 +354,48 @@ class Hattrick : MainAPI() {
         val doc = app.get(iframeUrl, headers = headers, referer = originUrl).text
         val inner = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
             .find(doc)?.groupValues?.getOrNull(1) ?: return null
-        return resolveLovetier(inner, chName, iframeUrl)
+        return resolveLovetier(normalizeUrl(inner, iframeUrl), chName, iframeUrl)
     }
 
     private suspend fun resolveLovetier(playerUrl: String, chName: String, referer: String): ExtractorLink? {
-        val host = Regex("""https?://([^/]+)""").find(playerUrl)?.groupValues?.getOrNull(1)
-            ?: "lovetier.bz"
+        val host = hostOf(playerUrl) ?: "lovetier.bz"
         val headers = mapOf("User-Agent" to ua)
         val html = app.get(playerUrl, headers = headers, referer = referer).text
         val raw = Regex("""streamUrl\s*:\s*"([^"]+)"""").find(html)?.groupValues?.getOrNull(1)
             ?: return null
         val m3u8 = raw.replace("\\/", "/")
+        return buildM3u8Link(chName, m3u8, "https://$host/")
+    }
+
+    // ============= HELPERS =============
+
+    private suspend fun buildM3u8Link(chName: String, m3u8: String, refererUrl: String): ExtractorLink {
+        val origin = Regex("""https?://[^/]+""").find(refererUrl)?.value ?: refererUrl.trimEnd('/')
         return newExtractorLink(
             source = this.name,
             name = chName,
             url = m3u8,
             type = ExtractorLinkType.M3U8
         ) {
-            this.referer = "https://$host/"
+            this.referer = refererUrl
             this.quality = Qualities.Unknown.value
             this.headers = mapOf(
                 "User-Agent" to ua,
-                "Origin" to "https://$host"
+                "Origin" to origin
             )
+        }
+    }
+
+    private fun hostOf(url: String): String? =
+        Regex("""https?://([^/]+)""").find(url)?.groupValues?.getOrNull(1)
+
+    private fun normalizeUrl(url: String, base: String): String = when {
+        url.startsWith("http://") || url.startsWith("https://") -> url
+        url.startsWith("//") -> "https:$url"
+        url.startsWith("/") -> (hostOf(base)?.let { "https://$it$url" } ?: url)
+        else -> {
+            val baseDir = base.substringBeforeLast("/", base)
+            "$baseDir/$url"
         }
     }
 
@@ -275,7 +408,8 @@ class Hattrick : MainAPI() {
             ev.sport,
             ev.league,
             ev.timestamp.toString(),
-            chs
+            chs,
+            ev.logo
         ).joinToString("§")
     }
 
@@ -292,7 +426,8 @@ class Hattrick : MainAPI() {
             sport = p.getOrElse(1) { "" },
             league = p.getOrElse(2) { "" },
             timestamp = p.getOrElse(3) { "0" }.toLongOrNull() ?: 0L,
-            channels = chs
+            channels = chs,
+            logo = p.getOrElse(5) { "" }
         )
     }
 }
