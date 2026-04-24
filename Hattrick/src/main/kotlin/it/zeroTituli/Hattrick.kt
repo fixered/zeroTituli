@@ -2,7 +2,9 @@ package it.zeroTituli
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -17,16 +19,6 @@ class Hattrick : MainAPI() {
 
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
-
-    private val sportSections = listOf(
-        "football" to "⚽ Calcio",
-        "basketball" to "🏀 Basket",
-        "tennis" to "🎾 Tennis",
-        "handball" to "🤾 Pallamano",
-        "hockey" to "🏒 Hockey",
-        "mma" to "🥊 MMA / Boxe",
-        "snooker" to "🎱 Snooker"
-    )
 
     data class Channel(val name: String, val url: String)
 
@@ -53,63 +45,70 @@ class Hattrick : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val raw = fetchEvents()
-        // Re-classify all events via inferSport on title+league (data-sport del sito è spesso sbagliato)
-        val events = raw.map { ev ->
-            ev.copy(sport = inferSport("${ev.title} ${ev.league}"))
-        }.sortedBy { if (it.timestamp > 0L) it.timestamp else Long.MAX_VALUE }
+        val events = raw.map { ev -> ev.copy(sport = inferSport("${ev.title} ${ev.league}")) }
 
-        val sections = mutableListOf<HomePageList>()
-
-        // ⭐ In Evidenza (match top-block con stream funzionanti)
-        val featured = events.filter { it.channels.any { c -> isTopBlockChannel(c) } }
-        if (featured.isNotEmpty()) {
-            sections += HomePageList("⭐ In Evidenza", featured.map { toSearchResponse(it) })
-        }
-
-        // Day boundaries (Europe/Rome)
         val tz = TimeZone.getTimeZone("Europe/Rome")
-        val cal = java.util.Calendar.getInstance(tz).apply {
-            set(java.util.Calendar.HOUR_OF_DAY, 0)
-            set(java.util.Calendar.MINUTE, 0)
-            set(java.util.Calendar.SECOND, 0)
-            set(java.util.Calendar.MILLISECOND, 0)
+        val cal = Calendar.getInstance(tz).apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
         }
         val todayStart = cal.timeInMillis / 1000L
         val tomorrowStart = todayStart + 86400L
         val dayAfterStart = tomorrowStart + 86400L
         val nowSec = System.currentTimeMillis() / 1000L
 
-        // 🔴 Live Ora (inizio negli ultimi 3h)
-        val live = events.filter {
-            it.timestamp in (nowSec - 10_800L)..nowSec
-        }
+        val sections = mutableListOf<HomePageList>()
+
+        // 🔴 Live Ora — iniziate nelle ultime 3h
+        val live = events.filter { it.timestamp in (nowSec - 10_800L)..nowSec }
+            .sortedByDescending { it.timestamp }
         if (live.isNotEmpty()) {
             sections += HomePageList("🔴 Live Ora", live.map { toSearchResponse(it) })
         }
 
-        // ⏰ Prossime (oggi, dopo adesso)
+        // ⏰ Prossime · Oggi — divise per fascia oraria
         val upcomingToday = events.filter {
             it.timestamp in (nowSec + 1L)..(tomorrowStart - 1L)
         }
-        if (upcomingToday.isNotEmpty()) {
-            sections += HomePageList("⏰ Prossime · Oggi", upcomingToday.map { toSearchResponse(it) })
-        }
+        addBandSections(sections, upcomingToday, tz, prefix = "⏰ Oggi")
 
-        // 📅 Domani
-        val tomorrow = events.filter {
-            it.timestamp in tomorrowStart..(dayAfterStart - 1L)
-        }
-        if (tomorrow.isNotEmpty()) {
-            sections += HomePageList("📅 Domani", tomorrow.map { toSearchResponse(it) })
-        }
-
-        // Sport sections (classificazione corretta)
-        sportSections.forEach { (key, label) ->
-            val items = events.filter { it.sport == key }.map { toSearchResponse(it) }
-            if (items.isNotEmpty()) sections += HomePageList(label, items)
-        }
+        // 📅 Domani — divise per fascia oraria
+        val tomorrow = events.filter { it.timestamp in tomorrowStart..(dayAfterStart - 1L) }
+        addBandSections(sections, tomorrow, tz, prefix = "📅 Domani")
 
         return newHomePageResponse(sections, false)
+    }
+
+    private fun bandOf(ts: Long, tz: TimeZone): String {
+        val c = Calendar.getInstance(tz).apply { timeInMillis = ts * 1000L }
+        return when (c.get(Calendar.HOUR_OF_DAY)) {
+            in 0..11 -> "Mattina"
+            in 12..17 -> "Pomeriggio"
+            else -> "Sera"
+        }
+    }
+
+    private fun addBandSections(
+        out: MutableList<HomePageList>,
+        events: List<Event>,
+        tz: TimeZone,
+        prefix: String
+    ) {
+        val bandEmoji = mapOf(
+            "Mattina" to "🌅",
+            "Pomeriggio" to "☀️",
+            "Sera" to "🌙"
+        )
+        listOf("Mattina", "Pomeriggio", "Sera").forEach { band ->
+            val items = events.filter { bandOf(it.timestamp, tz) == band }
+                .sortedBy { it.timestamp }
+                .map { toSearchResponse(it) }
+            if (items.isNotEmpty()) {
+                out += HomePageList("$prefix · ${bandEmoji[band]} $band", items)
+            }
+        }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -131,7 +130,7 @@ class Hattrick : MainAPI() {
         }
         return newLiveStreamLoadResponse(name = ev.title, url = url, dataUrl = url) {
             this.plot = plotLine
-            if (ev.logo.isNotBlank()) this.posterUrl = ev.logo
+            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title, ev.league) }
         }
     }
 
@@ -311,8 +310,15 @@ class Hattrick : MainAPI() {
             url = encodeEvent(ev),
             type = TvType.Live
         ) {
-            if (ev.logo.isNotBlank()) this.posterUrl = ev.logo
+            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title, ev.league) }
         }
+    }
+
+    private fun generatePlaceholderPoster(title: String, league: String): String {
+        // placehold.co: servizio gratuito, immagine generata al volo con testo del match
+        val text = (if (league.isNotBlank()) "$title\n$league" else title).take(80)
+        val encoded = URLEncoder.encode(text, "UTF-8").replace("+", "%20")
+        return "https://placehold.co/600x338/1a1a2e/ffffff/png?text=$encoded&font=roboto"
     }
 
     private fun formatWhen(ts: Long): String {
