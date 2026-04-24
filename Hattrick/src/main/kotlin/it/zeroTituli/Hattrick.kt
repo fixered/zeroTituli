@@ -2,101 +2,89 @@ package it.zeroTituli
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class Hattrick : MainAPI() {
-    override var mainUrl = "https://www.hattrick.ws"
+    override var mainUrl = "https://htsport.org"
     override var name = "Hattrick Sport"
     override var lang = "it"
     override val hasMainPage = true
+    override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
-    // URL del file M3U8 su GitHub
-    private val m3u8Url = "https://raw.githubusercontent.com/fixered/htk/main/hattrick.m3u8"
+    private val ua =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
 
-    // Mappa canali: nome normalizzato -> stream URL
-    private var channelStreams = mutableMapOf<String, String>()
-
-    data class Match(
-        val homeTeam: String,
-        val awayTeam: String,
-        val competition: String,
-        val time: String,
-        val channels: List<String>,
-        val logo: String
+    private val sportSections = listOf(
+        "football" to "⚽ Calcio",
+        "basketball" to "🏀 Basket",
+        "tennis" to "🎾 Tennis",
+        "handball" to "🤾 Pallamano",
+        "hockey" to "🏒 Hockey",
+        "mma" to "🥊 MMA / Boxe",
+        "snooker" to "🎱 Snooker"
     )
 
-    override val mainPage = mainPageOf(
-        "" to "Partite Live Oggi"
+    private val tigerLookupHosts = listOf(
+        "chevy.tigertestxtg.sbs",
+        "chevy.enviromentalanimal.horse",
+        "chevy.soyspace.cyou"
     )
+
+    data class Channel(val name: String, val url: String)
+
+    data class Event(
+        val title: String,
+        val sport: String,
+        val league: String,
+        val timestamp: Long,
+        val channels: List<Channel>
+    )
+
+    @Volatile private var eventsCache: List<Event>? = null
+    @Volatile private var cacheTime: Long = 0L
+    private val cacheTtlMs = 60_000L
+
+    private val timeFmt by lazy {
+        SimpleDateFormat("HH:mm", Locale.ITALY).apply {
+            timeZone = TimeZone.getTimeZone("Europe/Rome")
+        }
+    }
+
+    // ============= MAIN PAGE =============
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Carica gli stream dal M3U8
-        if (channelStreams.isEmpty()) {
-            loadM3U8Streams()
+        val events = fetchEvents()
+        val sections = sportSections.mapNotNull { (key, label) ->
+            val items = events.filter { it.sport == key }.map { toSearchResponse(it) }
+            if (items.isEmpty()) null else HomePageList(label, items)
         }
-
-        // Scraping delle partite da hattrick.ws
-        val matches = scrapeMatches()
-        
-        val items = matches.map { match ->
-            val matchName = "${match.homeTeam} - ${match.awayTeam}"
-            val posterUrl = match.logo.ifEmpty { 
-                "https://resource-m.calcionapoli24.it/www/thumbs/1200x/1590651555_987.jpg" 
-            }
-            
-            newLiveSearchResponse(
-                name = "$matchName\n${match.competition} • ${match.time}",
-                url = encodeMatchData(match),
-                type = TvType.Live
-            ) {
-                this.posterUrl = posterUrl
-            }
-        }
-
-        return newHomePageResponse(
-            list = listOf(HomePageList(request.name, items)),
-            hasNext = false
-        )
+        return newHomePageResponse(sections, false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        if (channelStreams.isEmpty()) {
-            loadM3U8Streams()
-        }
-
-        val matches = scrapeMatches()
-        return matches.filter { 
-            it.homeTeam.contains(query, ignoreCase = true) ||
-            it.awayTeam.contains(query, ignoreCase = true) ||
-            it.competition.contains(query, ignoreCase = true)
-        }.map { match ->
-            val matchName = "${match.homeTeam} - ${match.awayTeam}"
-            newLiveSearchResponse(
-                name = "$matchName\n${match.competition} • ${match.time}",
-                url = encodeMatchData(match),
-                type = TvType.Live
-            ) {
-                this.posterUrl = match.logo.ifEmpty { 
-                    "https://resource-m.calcionapoli24.it/www/thumbs/1200x/1590651555_987.jpg" 
-                }
-            }
-        }
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        return fetchEvents().filter {
+            it.title.contains(q, ignoreCase = true) ||
+                it.league.contains(q, ignoreCase = true)
+        }.map { toSearchResponse(it) }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val match = decodeMatchData(url)
-        val matchName = "${match.homeTeam} - ${match.awayTeam}"
-        
-        return newLiveStreamLoadResponse(
-            name = matchName,
-            url = url,
-            dataUrl = url
-        ) {
-            this.posterUrl = match.logo
+        val ev = decodeEvent(url)
+        val time = formatTime(ev.timestamp)
+        val plotLine = buildString {
+            if (ev.league.isNotBlank()) append(ev.league).append(" • ")
+            if (time.isNotBlank()) append(time)
+            append("\n${ev.channels.size} streams disponibili:\n")
+            ev.channels.forEachIndexed { i, c -> append("${i + 1}. ${c.name}\n") }
+        }
+        return newLiveStreamLoadResponse(name = ev.title, url = url, dataUrl = url) {
+            this.plot = plotLine
         }
     }
 
@@ -106,169 +94,192 @@ class Hattrick : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val match = decodeMatchData(data)
-        var linksAdded = false
-
-        // Per ogni canale della partita, cerca lo stream corrispondente
-        match.channels.forEach { channelName ->
-            val normalizedChannel = normalizeChannelName(channelName)
-            val streamUrl = findStreamForChannel(normalizedChannel)
-            
-            if (streamUrl != null) {
-                callback.invoke(
-                    ExtractorLink(
-                        source = this.name,
-                        name = channelName,
-                        url = streamUrl,
-                        referer = mainUrl,
-                        quality = Qualities.Unknown.value,
-                        type = ExtractorLinkType.M3U8
-                    )
-                )
-                linksAdded = true
+        val ev = decodeEvent(data)
+        var any = false
+        ev.channels.apmap { ch ->
+            val link = runCatching { resolveChannel(ch) }.getOrNull()
+            if (link != null) {
+                callback(link)
+                any = true
             }
         }
-
-        return linksAdded
+        return any
     }
 
-    // ============= FUNZIONI DI SUPPORTO =============
+    // ============= SCRAPING =============
 
-    private suspend fun loadM3U8Streams() {
-        try {
-            // Usa .document.text() che è stabile
-            val content = app.get(m3u8Url).document.text()
-            val lines = content.lines()
-            
-            var currentName: String? = null
-            
-            for (i in lines.indices) {
-                val line = lines[i].trim()
-                
-                if (line.startsWith("#EXTINF:")) {
-                    // Estrai il nome del canale
-                    val nameMatch = Regex(""",\s*(.+)$""").find(line)
-                    currentName = nameMatch?.groupValues?.get(1)?.trim()
-                    
-                } else if (line.isNotEmpty() && !line.startsWith("#") && currentName != null) {
-                    // URL dello stream
-                    val normalizedName = normalizeChannelName(currentName)
-                    channelStreams[normalizedName] = line
-                    currentName = null
-                }
+    private suspend fun fetchEvents(): List<Event> {
+        val now = System.currentTimeMillis()
+        eventsCache?.let { if (now - cacheTime < cacheTtlMs) return it }
+
+        val doc = app.get("$mainUrl/", headers = mapOf("User-Agent" to ua)).document
+        val parsed = doc.select("div.event").mapNotNull { el ->
+            val sport = el.attr("data-sport").lowercase().ifBlank { return@mapNotNull null }
+            val title = el.selectFirst("div.event-title")?.text()?.trim().orEmpty()
+            if (title.isBlank()) return@mapNotNull null
+            val league = el.attr("data-league").trim()
+            val ts = el.attr("data-ts").toLongOrNull() ?: 0L
+            val channels = el.select("div.buttons a.btn.tv").mapNotNull { a ->
+                val href = a.attr("href").trim()
+                val chName = a.text().trim()
+                if (href.isBlank() || chName.isBlank()) null
+                else Channel(chName, href)
             }
-            
-            println("Caricati ${channelStreams.size} canali dal M3U8")
-        } catch (e: Exception) {
-            println("Errore caricamento M3U8: ${e.message}")
+            if (channels.isEmpty()) null
+            else Event(title, sport, league, ts, channels)
         }
+
+        eventsCache = parsed
+        cacheTime = now
+        return parsed
     }
 
-    private suspend fun scrapeMatches(): List<Match> {
-        val matches = mutableListOf<Match>()
-        
-        try {
-            val doc: Document = app.get(mainUrl).document
-            
-            // Seleziona tutte le righe degli eventi
-            doc.select(".events .row").forEach { row ->
-                try {
-                    // Estrai informazioni partita
-                    val gameNameElement = row.selectFirst(".game-name span")
-                    val gameName = gameNameElement?.text() ?: return@forEach
-                    
-                    // Dividi in squadre (formato: "Team1 - Team2")
-                    val teams = gameName.split("-").map { it.trim() }
-                    if (teams.size != 2) return@forEach
-                    
-                    val homeTeam = teams[0]
-                    val awayTeam = teams[1]
-                    
-                    // Estrai competizione e orario
-                    val dateText = row.selectFirst(".date")?.text() ?: ""
-                    val parts = dateText.split("·").map { it.trim() }
-                    val time = if (parts.isNotEmpty()) parts[0] else ""
-                    val competition = if (parts.size > 1) parts[1] else ""
-                    
-                    // Estrai logo
-                    val logo = row.selectFirst(".mascot")?.attr("src") ?: ""
-                    
-                    // Estrai canali dai pulsanti
-                    val channels = row.select(".btn").mapNotNull { btn ->
-                        val link = btn.selectFirst("a")
-                        link?.text()?.trim()
-                    }.filter { it.isNotEmpty() }
-                    
-                    if (channels.isNotEmpty()) {
-                        matches.add(Match(
-                            homeTeam = homeTeam,
-                            awayTeam = awayTeam,
-                            competition = competition,
-                            time = time,
-                            channels = channels,
-                            logo = logo
-                        ))
-                    }
-                } catch (e: Exception) {
-                    println("Errore parsing riga: ${e.message}")
-                }
-            }
-        } catch (e: Exception) {
-            println("Errore scraping: ${e.message}")
+    private fun toSearchResponse(ev: Event): LiveSearchResponse {
+        val time = formatTime(ev.timestamp)
+        val meta = when {
+            ev.league.isNotBlank() && time.isNotBlank() -> "$time · ${ev.league}"
+            ev.league.isNotBlank() -> ev.league
+            else -> time
         }
-        
-        return matches
+        val label = if (meta.isNotBlank()) "${ev.title}\n$meta" else ev.title
+        return newLiveSearchResponse(
+            name = label,
+            url = encodeEvent(ev),
+            type = TvType.Live
+        ) {}
     }
 
-    private fun normalizeChannelName(name: String): String {
-        // Normalizza i nomi dei canali per il matching
-        val normalized = name.lowercase()
-            .replace("sky sport ", "")
-            .replace("sport ", "")
-            .replace(" hd", "")
-            .replace(" (backup)", "")
-            .replace("(backup)", "")
-            .replace("  ", " ")
-            .trim()
-        
-        // Mapping speciali
+    private fun formatTime(ts: Long): String =
+        if (ts > 0L) timeFmt.format(Date(ts * 1000L)) else ""
+
+    // ============= STREAM RESOLVERS =============
+
+    private suspend fun resolveChannel(ch: Channel): ExtractorLink? {
+        val headers = mapOf("User-Agent" to ua)
+        val html = app.get(ch.url, headers = headers, referer = "$mainUrl/").text
+        val iframeSrc = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.getOrNull(1)?.trim() ?: return null
+
+        val lower = iframeSrc.lowercase()
         return when {
-            normalized.contains("1") || normalized == "uno" -> "uno"
-            normalized.contains("calcio") -> "calcio"
-            normalized.contains("mix") -> "mix"
-            normalized.contains("max") -> "max"
-            normalized.contains("arena") -> "arena"
-            normalized.contains("24") -> "24"
-            normalized.contains("tennis") -> "tennis"
-            normalized.contains("motogp") || normalized.contains("moto gp") -> "motogp"
-            normalized.contains("f1") || normalized.contains("formula") -> "f1"
-            normalized.contains("dazn") -> "dazn"
-            else -> normalized
+            lower.contains("maxsport.php") -> resolveTigerMaxsport(iframeSrc, ch.name)
+            lower.contains("popcdn.day") -> resolvePopcdn(iframeSrc, ch.name, ch.url)
+            lower.contains("lovetier.bz") -> resolveLovetier(iframeSrc, ch.name, ch.url)
+            lower.contains("embed.php") -> null // bet365 dinamico, non gestibile headless
+            else -> null
         }
     }
 
-    private fun findStreamForChannel(normalizedChannel: String): String? {
-        // Cerca lo stream corrispondente al canale
-        return channelStreams[normalizedChannel] ?: 
-               channelStreams.entries.firstOrNull { (key, _) ->
-                   key.contains(normalizedChannel) || normalizedChannel.contains(key)
-               }?.value
+    // maxsport.php?id=KEY on tigertestxtg.sbs (or mirrors)
+    private suspend fun resolveTigerMaxsport(iframeUrl: String, chName: String): ExtractorLink? {
+        val key = Regex("""[?&]id=([^&#]+)""").find(iframeUrl)?.groupValues?.getOrNull(1)
+            ?: return null
+        val iframeHost = Regex("""https?://([^/]+)""").find(iframeUrl)?.groupValues?.getOrNull(1)
+            ?: "tigertestxtg.sbs"
+        val playerReferer = "https://$iframeHost/"
+
+        val lookupHosts = buildList {
+            add("chevy.$iframeHost")
+            tigerLookupHosts.forEach { if (!contains(it)) add(it) }
+        }
+
+        val headers = mapOf(
+            "User-Agent" to ua,
+            "Origin" to playerReferer.trimEnd('/'),
+            "Accept" to "application/json, text/plain, */*"
+        )
+
+        for (host in lookupHosts) {
+            val serverKey = runCatching {
+                val resp = app.get(
+                    "https://$host/server_lookup?channel_id=$key",
+                    headers = headers,
+                    referer = playerReferer,
+                    timeout = 8L
+                )
+                Regex(""""server_key"\s*:\s*"([^"]+)"""")
+                    .find(resp.text)?.groupValues?.getOrNull(1)
+            }.getOrNull() ?: continue
+
+            val path = if (serverKey == "top1/cdn") "top1/cdn" else serverKey
+            val m3u8 = "https://$host/proxy/$path/$key/mono.css"
+
+            return newExtractorLink(
+                source = this.name,
+                name = chName,
+                url = m3u8,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = playerReferer
+                this.quality = Qualities.Unknown.value
+                this.headers = mapOf(
+                    "User-Agent" to ua,
+                    "Origin" to playerReferer.trimEnd('/')
+                )
+            }
+        }
+        return null
     }
 
-    private fun encodeMatchData(match: Match): String {
-        // Codifica i dati della partita in una stringa
-        return "${match.homeTeam}|${match.awayTeam}|${match.competition}|${match.time}|${match.channels.joinToString(",")}|${match.logo}"
+    // popcdn.day/go.php?stream=KEY → iframe lovetier.bz/player/KEY
+    private suspend fun resolvePopcdn(iframeUrl: String, chName: String, originUrl: String): ExtractorLink? {
+        val headers = mapOf("User-Agent" to ua)
+        val doc = app.get(iframeUrl, headers = headers, referer = originUrl).text
+        val inner = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(doc)?.groupValues?.getOrNull(1) ?: return null
+        return resolveLovetier(inner, chName, iframeUrl)
     }
 
-    private fun decodeMatchData(data: String): Match {
-        val parts = data.split("|")
-        return Match(
-            homeTeam = parts.getOrNull(0) ?: "",
-            awayTeam = parts.getOrNull(1) ?: "",
-            competition = parts.getOrNull(2) ?: "",
-            time = parts.getOrNull(3) ?: "",
-            channels = parts.getOrNull(4)?.split(",") ?: emptyList(),
-            logo = parts.getOrNull(5) ?: ""
+    private suspend fun resolveLovetier(playerUrl: String, chName: String, referer: String): ExtractorLink? {
+        val host = Regex("""https?://([^/]+)""").find(playerUrl)?.groupValues?.getOrNull(1)
+            ?: "lovetier.bz"
+        val headers = mapOf("User-Agent" to ua)
+        val html = app.get(playerUrl, headers = headers, referer = referer).text
+        val raw = Regex("""streamUrl\s*:\s*"([^"]+)"""").find(html)?.groupValues?.getOrNull(1)
+            ?: return null
+        val m3u8 = raw.replace("\\/", "/")
+        return newExtractorLink(
+            source = this.name,
+            name = chName,
+            url = m3u8,
+            type = ExtractorLinkType.M3U8
+        ) {
+            this.referer = "https://$host/"
+            this.quality = Qualities.Unknown.value
+            this.headers = mapOf(
+                "User-Agent" to ua,
+                "Origin" to "https://$host"
+            )
+        }
+    }
+
+    // ============= EVENT ENCODE/DECODE =============
+
+    private fun encodeEvent(ev: Event): String {
+        val chs = ev.channels.joinToString("¤") { "${it.name}¦${it.url}" }
+        return listOf(
+            ev.title,
+            ev.sport,
+            ev.league,
+            ev.timestamp.toString(),
+            chs
+        ).joinToString("§")
+    }
+
+    private fun decodeEvent(s: String): Event {
+        val p = s.split("§")
+        val chs = p.getOrNull(4).orEmpty()
+            .split("¤")
+            .mapNotNull {
+                val parts = it.split("¦")
+                if (parts.size == 2) Channel(parts[0], parts[1]) else null
+            }
+        return Event(
+            title = p.getOrElse(0) { "" },
+            sport = p.getOrElse(1) { "" },
+            league = p.getOrElse(2) { "" },
+            timestamp = p.getOrElse(3) { "0" }.toLongOrNull() ?: 0L,
+            channels = chs
         )
     }
 }
