@@ -168,7 +168,8 @@ class Hattrick : MainAPI() {
             if (title.isBlank()) return@forEach
             val dateText = row.selectFirst("p.date")?.text()?.trim().orEmpty()
             val (time, league) = splitDateText(dateText)
-            val logo = row.selectFirst("img.mascot")?.attr("src").orEmpty()
+            val rawLogo = row.selectFirst("img.mascot")?.attr("src").orEmpty()
+            val logo = if (rawLogo.isBlank()) "" else normalizeUrl(rawLogo, "$mainUrl/")
             val channels = row.select("button.btn a[href]").mapNotNull { a ->
                 val href = a.attr("href").trim()
                 val label = a.text().trim()
@@ -308,7 +309,8 @@ class Hattrick : MainAPI() {
         return newLiveSearchResponse(
             name = label,
             url = encodeEvent(ev),
-            type = TvType.Live
+            type = TvType.Live,
+            fix = false
         ) {
             this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title, ev.league) }
         }
