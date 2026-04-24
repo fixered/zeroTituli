@@ -5,6 +5,5 @@ rootProject.name = "CloudstreamPlugins"
 
 include(
     "CalcioStreaming",
-    "Hattrick",
-    "DaddyLive"
+    "Hattrick"
 )
