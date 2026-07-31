@@ -32,7 +32,14 @@ internal object Covers {
         "1f6f8b", "8b1f3f", "2e6f40", "6b3fa0", "a85b00", "1b4f8f", "8f6b1b", "4a4a6a"
     )
 
-    /** Misure e posizioni dei layer, in percentuale sulla tela. */
+    /**
+     * Misure e posizioni dei layer, in percentuale sulla tela.
+     *
+     * [blankLinesOffset]: placehold.jp centra il blocco di testo, e non c'è modo di ancorarlo in
+     * basso (né `align-items` né `padding` funzionano). Si aggiungono righe vuote in cima: siccome
+     * il blocco resta centrato, il testo visibile scende di (righe vuote - righe di testo)/2, per
+     * cui l'offset va sommato al numero di righe di testo per tenere la banda ferma in fondo.
+     */
     private data class Layout(
         val size: String,
         val font: Int,
@@ -44,23 +51,26 @@ internal object Covers {
         val bandSize: String,
         val bandPos: String,
         val titleChars: Int,
-        val metaChars: Int
+        val metaChars: Int,
+        val blankLinesOffset: Int
     )
 
     private val portrait = Layout(
         size = "400x600", font = 22,
-        logoSize = "44% auto", logoLeft = "4% 22%", logoRight = "96% 22%",
-        logoOneSize = "40% auto", logoOnePos = "50% 22%",
-        bandSize = "100% 22%", bandPos = "0 44%",
-        titleChars = 24, metaChars = 28
+        logoSize = "44% auto", logoLeft = "4% 30%", logoRight = "96% 30%",
+        logoOneSize = "40% auto", logoOnePos = "50% 30%",
+        bandSize = "100% 26%", bandPos = "0 100%",
+        titleChars = 24, metaChars = 28,
+        blankLinesOffset = 14
     )
 
     private val landscape = Layout(
         size = "600x338", font = 22,
-        logoSize = "26% auto", logoLeft = "6% 14%", logoRight = "94% 14%",
-        logoOneSize = "24% auto", logoOnePos = "50% 12%",
-        bandSize = "100% 30%", bandPos = "0 52%",
-        titleChars = 30, metaChars = 34
+        logoSize = "26% auto", logoLeft = "4% 22%", logoRight = "96% 22%",
+        logoOneSize = "24% auto", logoOnePos = "50% 22%",
+        bandSize = "100% 30%", bandPos = "0 100%",
+        titleChars = 30, metaChars = 34,
+        blankLinesOffset = 6
     )
 
     // ============= API =============
@@ -157,9 +167,10 @@ internal object Covers {
             append("}")
         }
 
-        val lines = wrap(cleanText(title), l.titleChars, 2) +
+        val textLines = wrap(cleanText(title), l.titleChars, 2) +
             (if (cleanText(meta).isNotBlank()) wrap(cleanText(meta), l.metaChars, 1) else emptyList())
-        val text = lines.joinToString("\n")
+        val blankLines = List(textLines.size + l.blankLinesOffset) { "" }
+        val text = (blankLines + textLines).joinToString("\n")
 
         return "https://placehold.jp/${l.font}/000000/$TEXT_COLOR/${l.size}.png" +
             "?text=${enc(text)}&css=${enc(css)}"
