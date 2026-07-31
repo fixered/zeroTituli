@@ -5,10 +5,9 @@ import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class CalcioStreamingPlugin: Plugin() {
+class Fctv33Plugin : Plugin() {
 
     override fun load(context: Context) {
-        // All providers should be added in this manner
-        registerMainAPI(CalcioStreaming())
+        registerMainAPI(Fctv33())
     }
 }

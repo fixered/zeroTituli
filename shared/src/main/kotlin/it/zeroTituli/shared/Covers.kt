@@ -1,4 +1,4 @@
-package it.zeroTituli
+package it.zeroTituli.shared
 
 import java.net.URLEncoder
 import java.text.Normalizer
@@ -75,11 +75,33 @@ internal object Covers {
 
     // ============= API =============
 
-    fun matchPoster(title: String, league: String, whenLabel: String): String =
-        matchCover(portrait, title, league, whenLabel)
+    /**
+     * @param badges loghi già noti (una fonte che li pubblica, come FCTV33): se ci sono si usano
+     * quelli, altrimenti si cercano nelle tabelle. I colori vengono comunque dalla tabella.
+     */
+    fun matchPoster(
+        title: String,
+        league: String,
+        whenLabel: String,
+        badges: List<String> = emptyList()
+    ): String = matchCover(portrait, title, league, whenLabel, badges)
 
-    fun matchBackdrop(title: String, league: String, whenLabel: String): String =
-        matchCover(landscape, title, league, whenLabel)
+    fun matchBackdrop(
+        title: String,
+        league: String,
+        whenLabel: String,
+        badges: List<String> = emptyList()
+    ): String = matchCover(landscape, title, league, whenLabel, badges)
+
+    /** Vero se la squadra è in tabella, anche per somiglianza: serve a scegliere il logo. */
+    fun isKnownTeam(name: String): Boolean = teamKey(name) != null
+
+    /**
+     * Vero solo se il nome normalizzato è esattamente una chiave della tabella. Per filtrare i
+     * palinsesti serve questa: col confronto tollerante "Lisburn Rangers" passerebbe per i
+     * Rangers e "San Antonio" per i San Antonio Spurs.
+     */
+    fun isMajorTeam(name: String): Boolean = teamLogos.containsKey(normalize(name))
 
     fun channelPoster(channelName: String): String = channelCover(portrait, channelName)
 
@@ -87,7 +109,13 @@ internal object Covers {
 
     // ============= COMPOSIZIONE =============
 
-    private fun matchCover(l: Layout, title: String, league: String, whenLabel: String): String {
+    private fun matchCover(
+        l: Layout,
+        title: String,
+        league: String,
+        whenLabel: String,
+        knownBadges: List<String> = emptyList()
+    ): String {
         val meta = listOf(whenLabel, shortLeague(league))
             .filter { it.isNotBlank() }
             .joinToString(" - ")
@@ -96,14 +124,21 @@ internal object Covers {
         if (teams.size == 2) {
             val keyA = teamKey(teams[0])
             val keyB = teamKey(teams[1])
+            val usable = knownBadges.filter { it.startsWith("http") }
+            if (usable.size >= 2) {
+                return build(l, usable.take(2), pickColors(keyA, teams[0], keyB, teams[1]), title, meta)
+            }
             // Basta che una delle due sia riconosciuta: l'altra prende lo scudo generico.
             if (keyA != null || keyB != null) {
                 val badges = listOf(
-                    keyA?.let { teamLogos[it] } ?: STOCK_BADGE,
+                    keyA?.let { teamLogos[it] } ?: usable.firstOrNull() ?: STOCK_BADGE,
                     keyB?.let { teamLogos[it] } ?: STOCK_BADGE
                 )
                 val colors = pickColors(keyA, teams[0], keyB, teams[1])
                 return build(l, badges, colors, title, meta)
+            }
+            if (usable.size == 1) {
+                return build(l, usable, pickColors(null, teams[0], null, teams[1]), title, meta)
             }
         }
 
@@ -345,12 +380,13 @@ internal object Covers {
 
     private val noiseWords = setOf(
         "fc", "ac", "as", "cf", "sc", "ss", "ssc", "us", "usd", "asd", "ssd", "fbc", "ogc",
-        "sv", "vfl", "vfb", "vfr", "bsc", "tsg", "tsv", "calcio", "club", "cp", "sad",
-        "afc", "cfc", "hsv", "if", "ff", "bk", "sk", "rc", "rcd", "cd", "ud", "sd",
-        "fk", "nk", "hk", "kv", "rsc", "rkc", "acf", "aca"
+        "sv", "vfl", "vfb", "vfr", "bsc", "tsg", "tsv", "fsv", "msv", "spvgg", "kaa",
+        "calcio", "club", "cp", "sad", "afc", "cfc", "hsv", "if", "ff", "bk", "sk",
+        "rc", "rcd", "cd", "ud", "sd", "fk", "nk", "hk", "kv", "rsc", "rkc", "acf", "aca"
     )
 
-    private val yearRegex = Regex("""^(1[89]|20)\d\d$""")
+    /** Anni di fondazione e numeri nei nomi ("Mainz 05", "Schalke 04", "Hertha 1892"). */
+    private val yearRegex = Regex("""^\d{1,2}$|^(1[89]|20)\d\d$""")
 
     /** Normalizzazione dei nomi squadra: stessa usata per generare le chiavi della tabella. */
     fun normalize(s: String): String {
@@ -721,7 +757,6 @@ internal object Covers {
         "sassuolo" to "https://r2.thesportsdb.com/images/media/team/badge/xystvp1448806138.png",
         "saudi arabia" to "https://r2.thesportsdb.com/images/media/team/badge/24xwpq1594125742.png",
         "schalke" to "https://r2.thesportsdb.com/images/media/team/badge/hnci291621593978.png",
-        "schalke 04" to "https://r2.thesportsdb.com/images/media/team/badge/hnci291621593978.png",
         "scotland" to "https://r2.thesportsdb.com/images/media/team/badge/3691i11552945146.png",
         "scozia" to "https://r2.thesportsdb.com/images/media/team/badge/3691i11552945146.png",
         "senegal" to "https://r2.thesportsdb.com/images/media/team/badge/slayb01780546342.png",
@@ -1055,7 +1090,6 @@ internal object Covers {
         "sassuolo" to "00a752,000000",
         "saudi arabia" to "125b34,7ec8ae",
         "schalke" to "004d9d,ffffff",
-        "schalke 04" to "004d9d,ffffff",
         "senegal" to "11a335,ffdc00,e63f23",
         "serbia" to "b72e3e,b49d5a,ffffff",
         "sevilla" to "ffffff,f43333,c79100",

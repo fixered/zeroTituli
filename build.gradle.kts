@@ -44,6 +44,10 @@ subprojects {
     android {
         namespace = "it.fixered.zeroTituli"
 
+        // Codice condiviso tra i plugin (tabelle e composizione delle copertine): una sola
+        // copia, compilata dentro ogni plugin.
+        sourceSets.getByName("main").java.srcDir(rootProject.file("shared/src/main/kotlin"))
+
         defaultConfig {
             minSdk = 21
             compileSdkVersion(35)

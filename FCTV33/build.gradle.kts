@@ -1,12 +1,10 @@
 // use an integer for version numbers
-version = 23
+version = 1
 
 
 cloudstream {
     language = "it"
-    // All of these properties are optional, you can safely remove them
-
-     description = "Live streams from Hattrick."
+    description = "Partite delle squadre e delle competizioni principali da FCTV33."
     authors = listOf("fixered")
 
     /**
@@ -16,10 +14,10 @@ cloudstream {
      * 2: Slow
      * 3: Beta only
      * */
-    status = 1 // will be 3 if unspecified
+    status = 1
     tvTypes = listOf(
         "Live",
     )
 
-    iconUrl = "https://logowiki.net/wp-content/uploads/imgp/Hattrick-Logo-1-5512.jpg"
+    iconUrl = "https://statics1.tcxru135mdqf.ru/img/fc/favicon_32.png"
 }

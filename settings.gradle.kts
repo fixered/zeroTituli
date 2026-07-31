@@ -4,6 +4,6 @@ rootProject.name = "CloudstreamPlugins"
 // All new projects should get automatically included unless specified in the "disabled" variable.
 
 include(
-    "CalcioStreaming",
-    "Hattrick"
+    "Hattrick",
+    "FCTV33"
 )

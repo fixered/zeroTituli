@@ -3,6 +3,7 @@ package it.zeroTituli
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
+import it.zeroTituli.shared.Covers
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.util.concurrent.atomic.AtomicBoolean
