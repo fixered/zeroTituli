@@ -142,7 +142,7 @@ class Hattrick : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val ev = decodeEvent(url)
+        val ev = findEvent(url) ?: throw ErrorLoadingException("Evento non più in palinsesto")
         val time = formatWhen(ev.timestamp)
         val plotLine = buildString {
             if (ev.league.isNotBlank()) append(ev.league).append(" • ")
@@ -150,9 +150,10 @@ class Hattrick : MainAPI() {
             append("\n\nCanali disponibili:\n")
             ev.channels.forEachIndexed { i, c -> append("${i + 1}. ${c.name}\n") }
         }
-        return newLiveStreamLoadResponse(name = ev.title, url = url, dataUrl = url) {
+        val id = eventId(ev)
+        return newLiveStreamLoadResponse(name = ev.title, url = id, dataUrl = id) {
             this.plot = plotLine
-            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title, ev.league) }
+            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title) }
         }
     }
 
@@ -162,7 +163,7 @@ class Hattrick : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val ev = decodeEvent(data)
+        val ev = findEvent(data) ?: return false
         val any = AtomicBoolean(false)
         ev.channels.amap { ch ->
             val link = runCatching { resolveChannel(ch) }.getOrNull()
@@ -368,19 +369,58 @@ class Hattrick : MainAPI() {
         val label = if (meta.isNotBlank()) "${ev.title}\n$meta" else ev.title
         return newLiveSearchResponse(
             name = label,
-            url = encodeEvent(ev),
+            url = eventId(ev),
             type = TvType.Live,
             fix = false
         ) {
-            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title, ev.league) }
+            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title) }
         }
     }
 
-    private fun generatePlaceholderPoster(title: String, league: String): String {
-        // placehold.co: servizio gratuito, immagine generata al volo con testo del match
-        val text = (if (league.isNotBlank()) "$title\n$league" else title).take(80)
+    // ============= COPERTINA =============
+
+    private val posterFontSize = 24     // px su una tela 600x338
+    private val posterLineChars = 24    // caratteri per riga prima di andare a capo
+    private val posterMaxLines = 3
+
+    /**
+     * Copertina generata al volo con il solo titolo dell'evento.
+     * placehold.jp (a differenza di placehold.co) accetta la dimensione del font nel path,
+     * quindi il testo non viene ingigantito per riempire la larghezza.
+     */
+    private fun generatePlaceholderPoster(title: String): String {
+        val text = wrapForPoster(posterText(title))
         val encoded = URLEncoder.encode(text, "UTF-8").replace("+", "%20")
-        return "https://placehold.co/600x338/1a1a2e/ffffff/png?text=$encoded&font=roboto"
+        return "https://placehold.jp/$posterFontSize/1a1a2e/ffffff/600x338.png?text=$encoded"
+    }
+
+    /** Nel titolo non ci devono finire url: sulla copertina si legge solo il nome dell'evento. */
+    private fun posterText(title: String): String {
+        val cleaned = title
+            .replace(Regex("""https?://\S+"""), " ")
+            .replace(Regex("""[§¤¦]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        return cleaned.ifBlank { name }
+    }
+
+    private fun wrapForPoster(text: String): String {
+        val lines = mutableListOf<String>()
+        val current = StringBuilder()
+        text.split(" ").forEach { word ->
+            when {
+                current.isEmpty() -> current.append(word)
+                current.length + 1 + word.length <= posterLineChars -> current.append(' ').append(word)
+                else -> {
+                    lines += current.toString()
+                    current.setLength(0)
+                    current.append(word)
+                }
+            }
+        }
+        if (current.isNotEmpty()) lines += current.toString()
+        return if (lines.size <= posterMaxLines) lines.joinToString("\n")
+        else lines.take(posterMaxLines).joinToString("\n").dropLast(1) + "…"
     }
 
     private fun formatWhen(ts: Long): String {
@@ -631,35 +671,19 @@ class Hattrick : MainAPI() {
         }
     }
 
-    // ============= EVENT ENCODE/DECODE =============
+    // ============= IDENTITÀ DELL'EVENTO =============
+    //
+    // L'id contiene solo orario e titolo: prima ci finivano dentro anche le url dei canali e
+    // Cloudstream, che in alcune schermate mostra l'id al posto del nome, faceva comparire un
+    // link di htsport come titolo. I canali vengono ripresi dal palinsesto al momento dell'uso.
 
-    private fun encodeEvent(ev: Event): String {
-        val chs = ev.channels.joinToString("¤") { "${it.name}¦${it.url}" }
-        return listOf(
-            ev.title,
-            ev.sport,
-            ev.league,
-            ev.timestamp.toString(),
-            chs,
-            ev.logo
-        ).joinToString("§")
-    }
+    private fun eventId(ev: Event): String = "${ev.timestamp}§${ev.title}"
 
-    private fun decodeEvent(s: String): Event {
-        val p = s.split("§")
-        val chs = p.getOrNull(4).orEmpty()
-            .split("¤")
-            .mapNotNull {
-                val parts = it.split("¦")
-                if (parts.size == 2) Channel(parts[0], parts[1]) else null
-            }
-        return Event(
-            title = p.getOrElse(0) { "" },
-            sport = p.getOrElse(1) { "" },
-            league = p.getOrElse(2) { "" },
-            timestamp = p.getOrElse(3) { "0" }.toLongOrNull() ?: 0L,
-            channels = chs,
-            logo = p.getOrElse(5) { "" }
-        )
+    private suspend fun findEvent(id: String): Event? {
+        val events = fetchEvents()
+        events.firstOrNull { eventId(it) == id }?.let { return it }
+        // Se il sito ha corretto l'orario si ripiega sul titolo
+        val title = id.substringAfter('§', id)
+        return events.firstOrNull { it.title.equals(title, ignoreCase = true) }
     }
 }
