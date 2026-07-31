@@ -152,7 +152,8 @@ class Hattrick : MainAPI() {
         val id = eventId(ev)
         return newLiveStreamLoadResponse(name = ev.title, url = id, dataUrl = id) {
             this.plot = plotLine
-            this.posterUrl = coverFor(ev)
+            this.posterUrl = posterFor(ev)
+            this.backgroundPosterUrl = backdropFor(ev)
         }
     }
 
@@ -372,18 +373,23 @@ class Hattrick : MainAPI() {
             type = TvType.Live,
             fix = false
         ) {
-            this.posterUrl = coverFor(ev)
+            this.posterUrl = posterFor(ev)
         }
     }
 
     // ============= COPERTINA =============
 
-    /** Loghi delle squadre / del campionato / del canale; il testo è solo il ripiego. */
-    private fun coverFor(ev: Event): String {
+    /** Copertina verticale: è quella delle card, che ritagliano ai lati un'immagine 16:9. */
+    private fun posterFor(ev: Event): String {
         if (ev.logo.isNotBlank()) return ev.logo
-        return if (ev.league == alwaysOnLeague) Covers.forChannel(ev.title)
-        else Covers.forMatch(ev.title, ev.league, formatWhen(ev.timestamp))
+        return if (ev.league == alwaysOnLeague) Covers.channelPoster(ev.title)
+        else Covers.matchPoster(ev.title, ev.league, formatWhen(ev.timestamp))
     }
+
+    /** Copertina orizzontale: sfondo della pagina di dettaglio. */
+    private fun backdropFor(ev: Event): String =
+        if (ev.league == alwaysOnLeague) Covers.channelBackdrop(ev.title)
+        else Covers.matchBackdrop(ev.title, ev.league, formatWhen(ev.timestamp))
 
     private fun formatWhen(ts: Long): String {
         if (ts <= 0L) return ""
