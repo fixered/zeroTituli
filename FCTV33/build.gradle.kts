@@ -1,5 +1,11 @@
 // use an integer for version numbers
-version = 1
+version = 2
+
+dependencies {
+    // Il proxy HLS locale gira su un thread proprio e deve chiamare le funzioni suspend
+    // dell'API: serve runBlocking. Le coroutine le fornisce l'app, quindi non finiscono nel .cs3.
+    compileOnly("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
+}
 
 
 cloudstream {

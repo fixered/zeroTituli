@@ -1,7 +1,6 @@
 package it.zeroTituli
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import it.zeroTituli.shared.Covers
 import it.zeroTituli.shared.MatchFilter
@@ -14,9 +13,10 @@ import java.util.TimeZone
 /**
  * FCTV33 (www.fctv33hd.fit).
  *
- * Il sito è una SPA: le partite arrivano da un'API protobuf aperta, i flussi si prendono dalla
- * pagina della partita sul dominio del player, intercettandoli in WebView. Dettagli e numeri di
- * campo del protobuf: docs/superpowers/specs/2026-07-31-plugin-fctv33-design.md
+ * Il sito è una SPA: partite e flussi arrivano da un'API protobuf aperta. L'm3u8 si ottiene in due
+ * richieste (elenco dei canali della partita, poi dettaglio del canale) e passa dal proxy locale
+ * che riscrive la playlist. Dettagli e numeri di campo del protobuf:
+ * docs/superpowers/specs/2026-07-31-plugin-fctv33-design.md
  */
 class Fctv33 : MainAPI() {
     override var mainUrl = "https://www.fctv33hd.fit"
@@ -29,8 +29,8 @@ class Fctv33 : MainAPI() {
     private val apiBase = "https://apis-data10.tcxru135mdqf.ru"
     private val logosBase = "https://logos1.tcxru135mdqf.ru"
     private val footballSportType = 1
-    private val locale = "it"
-    private val country = "IT"
+    private val fallbackCountry = "IT"
+    private val fallbackContinent = "EU"
 
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
@@ -49,9 +49,7 @@ class Fctv33 : MainAPI() {
         val homeLogo: String,
         val awayLogo: String,
         val league: String,
-        val country: String,
-        val leagueSlug: String,
-        val matchSlug: String
+        val country: String
     ) {
         val title: String get() = "$home - $away"
     }
@@ -61,6 +59,7 @@ class Fctv33 : MainAPI() {
     private val cacheTtlMs = 60_000L
 
     @Volatile private var playerDomainsCache: List<String>? = null
+    @Volatile private var geoCache: Pair<String, String>? = null
 
     // ============= HOME =============
 
@@ -154,15 +153,10 @@ class Fctv33 : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val match = findMatch(data) ?: return false
-        playerDomains().forEach { domain ->
-            val page = matchPageUrl(domain, match)
-            val stream = runCatching { interceptStream(page) }.getOrNull()
-            if (stream != null) {
-                callback(buildLink(match, stream, domain))
-                return true
-            }
-        }
-        return false
+        val channels = fetchChannels(match.id)
+        if (channels.isEmpty()) return false
+        channels.forEach { channel -> callback(buildLink(match, channel)) }
+        return true
     }
 
     // ============= API =============
@@ -190,7 +184,7 @@ class Fctv33 : MainAPI() {
 
     /**
      * Campi: 1 id, 3 orario in ms, 10 campionato (3.2 nome, 80.3.2 paese), 30 squadre
-     * (10.3.2 nome, 10.4 logo), 150 slug (20 partita, 21 campionato).
+     * (10.3.2 nome, 10.4 logo).
      */
     private fun parseMatch(m: Pb): Match? {
         val id = m.long(1) ?: return null
@@ -204,7 +198,6 @@ class Fctv33 : MainAPI() {
         val logos = teamBlocks.map { fixLogoUrl(it.string(4).orEmpty()) }
         if (names.size < 2 || names[0].isBlank() || names[1].isBlank()) return null
 
-        val seo = m.message(150)
         return Match(
             id = id,
             timestamp = ts,
@@ -213,9 +206,7 @@ class Fctv33 : MainAPI() {
             homeLogo = logos.getOrElse(0) { "" },
             awayLogo = logos.getOrElse(1) { "" },
             league = league,
-            country = country,
-            leagueSlug = seo?.string(21).orEmpty(),
-            matchSlug = seo?.string(20).orEmpty()
+            country = country
         )
     }
 
@@ -237,11 +228,15 @@ class Fctv33 : MainAPI() {
      * ROT47. Se la richiesta non riesce si usa la lista cucinata qui, aggiornata a mano.
      */
     private val fallbackPlayerDomains = listOf(
-        "https://jack29eo.mpcourageny9i9zzipper.my",
-        "https://nadia31bc.mp77g69ainei3gx2voxygen.ru",
-        "https://morgan97cf.006hndchurch05g7ifbreathing.sbs"
+        "https://jack31eo.mpcourageny9i9zzipper.my",
+        "https://nadia33bc.mp77g69ainei3gx2voxygen.ru",
+        "https://morgan01cg.006hndchurch05g7ifbreathing.sbs"
     )
 
+    /**
+     * I domini stanno nel campo `foth` di `g_player_domains`, che nella configurazione è una
+     * stringa JSON annidata: le virgolette arrivano con la barra rovesciata davanti.
+     */
     private suspend fun playerDomains(): List<String> {
         playerDomainsCache?.let { return it }
         val domains = runCatching {
@@ -251,7 +246,8 @@ class Fctv33 : MainAPI() {
                 referer = "$mainUrl/"
             ).text
             val decoded = rot47(raw)
-            val fothBlock = Regex(""""foth"\s*:\s*\[(.*?)]""").find(decoded)?.groupValues?.getOrNull(1)
+            val fothBlock = Regex("""\\?"foth\\?"\s*:\s*\[(.*?)]""").find(decoded)
+                ?.groupValues?.getOrNull(1)
             Regex("""https?:\\?/\\?/[^"\\,\s]+""").findAll(fothBlock.orEmpty())
                 .map { it.value.replace("\\/", "/").trimEnd('/') }
                 .toList()
@@ -270,38 +266,108 @@ class Fctv33 : MainAPI() {
         }
     }
 
-    /** {dominio}/{lingua}/football/{slugLega}-{matchId}/{slugPartita}.html?icg={paese} */
-    private fun matchPageUrl(domain: String, m: Match): String {
-        val leagueSlug = m.leagueSlug.ifBlank { "football" }
-        val matchSlug = m.matchSlug.ifBlank { slugify("${m.home} vs ${m.away}") }
-        return "$domain/$locale/football/$leagueSlug-${m.id}/$matchSlug.html?icg=$country"
+    /** Paese e continente decidono quale mirror del CDN serve i segmenti. */
+    private suspend fun geo(): Pair<String, String> {
+        geoCache?.let { return it }
+        val fetched = runCatching {
+            val body = Pb.parse(
+                app.get(
+                    "$apiBase/api/user/info",
+                    headers = mapOf("User-Agent" to ua),
+                    referer = "$mainUrl/"
+                ).body.bytes()
+            ).message(10)
+            val country = body?.string(2).orEmpty()
+            val continent = body?.string(3).orEmpty()
+            if (country.isBlank() || continent.isBlank()) null else country to continent
+        }.getOrNull()
+
+        val result = fetched ?: (fallbackCountry to fallbackContinent)
+        geoCache = result
+        return result
     }
 
-    private fun slugify(s: String): String = Covers.normalizeLoose(s).replace(" ", "-")
+    /** Un canale della partita: `1` id, `3` nome, `9` tipo di sorgente. */
+    private data class Channel(val id: Long, val name: String, val siteType: Long)
 
-    private suspend fun interceptStream(pageUrl: String): String? {
-        val request = WebViewResolver(
-            interceptUrl = Regex("""\.(m3u8|flv)"""),
-            useOkhttp = false,
-            timeout = 25_000L
-        ).resolveUsingWebView(url = pageUrl, referer = "$mainUrl/").first
-        return request?.url?.toString()
-    }
+    private suspend fun fetchChannels(matchId: Long): List<Channel> = runCatching {
+        val bytes = app.get(
+            "$apiBase/api/match/detail?matchId=$matchId&sportType=$footballSportType&stream=true",
+            headers = mapOf("User-Agent" to ua),
+            referer = "$mainUrl/"
+        ).body.bytes()
+        Pb.parse(bytes).message(10)?.messages(2).orEmpty().mapNotNull { s ->
+            val id = s.long(1) ?: return@mapNotNull null
+            val siteType = s.long(9) ?: return@mapNotNull null
+            Channel(id, s.string(3).orEmpty(), siteType)
+        }.distinctBy { it.id }
+    }.getOrNull().orEmpty()
 
-    private suspend fun buildLink(m: Match, streamUrl: String, domain: String): ExtractorLink {
-        val origin = Regex("""https?://[^/]+""").find(domain)?.value ?: domain
-        val type =
-            if (streamUrl.substringBefore('?').endsWith(".flv")) ExtractorLinkType.VIDEO
-            else ExtractorLinkType.M3U8
+    /**
+     * Il dettaglio del canale porta l'm3u8 nel campo `4`, in ROT47 e con otto caratteri di
+     * riempimento davanti. Senza paese e continente risponde con l'indirizzo del CDN d'origine,
+     * che rifiuta le richieste: servono entrambi.
+     */
+    private suspend fun playlistUrl(matchId: Long, channel: Channel): String? = runCatching {
+        val (country, continent) = geo()
+        val bytes = app.get(
+            "$apiBase/api/stream/detail?streamId=${channel.id}&matchId=$matchId" +
+                "&sportType=$footballSportType&siteType=${channel.siteType}" +
+                "&country=$country&continent=$continent",
+            headers = mapOf("User-Agent" to ua),
+            referer = "$mainUrl/"
+        ).body.bytes()
+        val encoded = Pb.parse(bytes).message(10)?.message(2)?.string(4)
+        encoded?.takeIf { it.length > 8 }?.let { rot47(it).substring(8) }
+            ?.takeIf { it.startsWith("http") }
+    }.getOrNull()
+
+    /**
+     * Le playlist passano dal proxy locale, i segmenti no: il player li scarica dai mirror con il
+     * `Referer` del dominio del player, che il CDN pretende.
+     */
+    private suspend fun buildLink(m: Match, channel: Channel): ExtractorLink {
+        val origin = playerDomains().firstOrNull() ?: fallbackPlayerDomains.first()
+        val url = HlsProxy.link(
+            resolver = { params -> playlist(params) },
+            params = mapOf(
+                "m" to m.id.toString(),
+                "s" to channel.id.toString(),
+                "t" to channel.siteType.toString()
+            )
+        )
+        val label = listOf(channel.name, m.league).firstOrNull { it.isNotBlank() } ?: this.name
         return newExtractorLink(
             source = this.name,
-            name = m.league.ifBlank { this.name },
-            url = streamUrl,
-            type = type
+            name = label,
+            url = url,
+            type = ExtractorLinkType.M3U8
         ) {
             this.referer = "$origin/"
             this.quality = Qualities.Unknown.value
             this.headers = mapOf("User-Agent" to ua, "Origin" to origin)
+        }
+    }
+
+    /** Risponde al proxy: ricalcola l'indirizzo del flusso, scarica la playlist e la riscrive. */
+    private suspend fun playlist(params: Map<String, String>): String? {
+        val (country, continent) = geo()
+        val upstream = params["u"] ?: run {
+            val matchId = params["m"]?.toLongOrNull() ?: return null
+            val streamId = params["s"]?.toLongOrNull() ?: return null
+            val siteType = params["t"]?.toLongOrNull() ?: return null
+            playlistUrl(matchId, Channel(streamId, "", siteType)) ?: return null
+        }
+        val body = runCatching {
+            app.get(
+                upstream,
+                headers = mapOf("User-Agent" to ua),
+                referer = "${playerDomains().firstOrNull() ?: mainUrl}/"
+            ).text
+        }.getOrNull()?.takeIf { it.contains("#EXTM3U") } ?: return null
+
+        return Csl.rewrite(body, upstream, continent, country) { nested ->
+            HlsProxy.link(resolver = { p -> playlist(p) }, params = mapOf("u" to nested))
         }
     }
 
