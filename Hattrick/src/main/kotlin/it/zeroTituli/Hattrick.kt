@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
-import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicBoolean
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -153,7 +152,7 @@ class Hattrick : MainAPI() {
         val id = eventId(ev)
         return newLiveStreamLoadResponse(name = ev.title, url = id, dataUrl = id) {
             this.plot = plotLine
-            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title) }
+            this.posterUrl = coverFor(ev)
         }
     }
 
@@ -373,54 +372,17 @@ class Hattrick : MainAPI() {
             type = TvType.Live,
             fix = false
         ) {
-            this.posterUrl = ev.logo.ifBlank { generatePlaceholderPoster(ev.title) }
+            this.posterUrl = coverFor(ev)
         }
     }
 
     // ============= COPERTINA =============
 
-    private val posterFontSize = 24     // px su una tela 600x338
-    private val posterLineChars = 24    // caratteri per riga prima di andare a capo
-    private val posterMaxLines = 3
-
-    /**
-     * Copertina generata al volo con il solo titolo dell'evento.
-     * placehold.jp (a differenza di placehold.co) accetta la dimensione del font nel path,
-     * quindi il testo non viene ingigantito per riempire la larghezza.
-     */
-    private fun generatePlaceholderPoster(title: String): String {
-        val text = wrapForPoster(posterText(title))
-        val encoded = URLEncoder.encode(text, "UTF-8").replace("+", "%20")
-        return "https://placehold.jp/$posterFontSize/1a1a2e/ffffff/600x338.png?text=$encoded"
-    }
-
-    /** Nel titolo non ci devono finire url: sulla copertina si legge solo il nome dell'evento. */
-    private fun posterText(title: String): String {
-        val cleaned = title
-            .replace(Regex("""https?://\S+"""), " ")
-            .replace(Regex("""[§¤¦]"""), " ")
-            .replace(Regex("""\s+"""), " ")
-            .trim()
-        return cleaned.ifBlank { name }
-    }
-
-    private fun wrapForPoster(text: String): String {
-        val lines = mutableListOf<String>()
-        val current = StringBuilder()
-        text.split(" ").forEach { word ->
-            when {
-                current.isEmpty() -> current.append(word)
-                current.length + 1 + word.length <= posterLineChars -> current.append(' ').append(word)
-                else -> {
-                    lines += current.toString()
-                    current.setLength(0)
-                    current.append(word)
-                }
-            }
-        }
-        if (current.isNotEmpty()) lines += current.toString()
-        return if (lines.size <= posterMaxLines) lines.joinToString("\n")
-        else lines.take(posterMaxLines).joinToString("\n").dropLast(1) + "…"
+    /** Loghi delle squadre / del campionato / del canale; il testo è solo il ripiego. */
+    private fun coverFor(ev: Event): String {
+        if (ev.logo.isNotBlank()) return ev.logo
+        return if (ev.league == alwaysOnLeague) Covers.forChannel(ev.title)
+        else Covers.forMatch(ev.title, ev.league, formatWhen(ev.timestamp))
     }
 
     private fun formatWhen(ts: Long): String {
