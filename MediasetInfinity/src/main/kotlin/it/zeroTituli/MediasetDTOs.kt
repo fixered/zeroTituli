@@ -110,3 +110,21 @@ data class FeedEntry(
 
     val plot: String? get() = longDescription?.takeIf { it.isNotBlank() } ?: description
 }
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class LoginResponse(val response: LoginBody? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class LoginBody(val beToken: String? = null, val sid: String? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class PlaybackCheckResponse(val response: PlaybackCheckBody? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class PlaybackCheckBody(
+    val mediaSelector: MediaSelector? = null,
+    val channelsRights: String? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class MediaSelector(val url: String? = null)
