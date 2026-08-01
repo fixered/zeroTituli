@@ -64,4 +64,21 @@ class MediasetSmilTest {
     fun `una risposta che non e un SMIL non lancia`() {
         assertTrue(MediasetSmil.read("<html><body>errore</body></html>") is SmilResult.Failed)
     }
+
+    @Test
+    fun `il controllo della cortesia precede quello dell'eccezione`() {
+        // Questo test verifica che la regola di priorità sia rispettata: un URL di
+        // cortesia torna GeoBlocked anche se l'exception param direbbe diversamente.
+        // Se i controlli fossero invertiti, NoAssetTypeFormatMatches farebbe tornare NoMatch.
+        val smil =
+            """<smil><body><seq><ref src="https://vod06-mediaset-it.akamaized.net/cortesia/GEOLOCK-DEF_2.mp4"><param name="exception" value="NoAssetTypeFormatMatches"/></ref></seq></body></smil>"""
+        assertEquals(SmilResult.GeoBlocked, MediasetSmil.read(smil))
+    }
+
+    @Test
+    fun `errorFiles senza exception torna NoMatch`() {
+        val smil =
+            """<smil><body><seq><ref src="http://link.theplatform.eu/s/errorFiles/Unavailable.flv"/></ref></seq></body></smil>"""
+        assertEquals(SmilResult.NoMatch, MediasetSmil.read(smil))
+    }
 }
