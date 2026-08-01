@@ -73,4 +73,44 @@ class MediasetLabelsTest {
         assertEquals("Stagione 1", MediasetLabels.seasonName(1))
         assertEquals("Stagione 12", MediasetLabels.seasonName(12))
     }
+
+    @Test
+    fun `le voci senza numero di stagione non si chiamano Extra e speciali`() {
+        // Nel feed i film arrivano sempre senza `tvSeasonNumber`: finivano nella stagione
+        // degli extra, quindi la scheda annunciava un film intero come materiale di
+        // contorno. Il nome dei due gruppi deve essere diverso, altrimenti il difetto
+        // torna senza che nessuno se ne accorga.
+        val unnumbered = MediasetLabels.seasonName(MediasetSeasons.UNNUMBERED_SEASON)
+        assertEquals("Senza stagione", unnumbered)
+        assertFalse(unnumbered.contains("Extra"))
+        // E non deve nemmeno annunciare il numero scelto per tenerla in fondo.
+        assertFalse(unnumbered.contains("998"))
+    }
+
+    @Test
+    fun `i diritti veri del feed decidono l etichetta Abbonamento`() {
+        // Le sigle sono quelle vere, copiate dal feed: `mediasetprogram$channelsRights` di
+        // "La promessa" (gratis) e de "La grande bellezza" (abbonamento). È la sola cosa che
+        // avverte l'utente prima di premere play, perché il messaggio lanciato da `loadLinks`
+        // non arriva a nessuno: CloudStream lo cattura e lo scrive solo nel log. Nel
+        // campione di 400 voci `movie` del feed, 265 sono senza AVOD.
+        val free = FeedEntry(
+            guid = "g",
+            title = "t",
+            longDescription = "Trama",
+            rights = listOf("MediasetPlay_ANY", "AVOD", "MediasetPlay_AVOD"),
+        )
+        val paid = FeedEntry(
+            guid = "g",
+            title = "t",
+            longDescription = "Trama",
+            rights = listOf("Infinity_ANY", "SVOD", "Infinity_SVOD"),
+        )
+        assertTrue(free.isFree)
+        assertFalse("SVOD non contiene AVOD: questa voce va segnalata", paid.isFree)
+        assertFalse(MediasetLabels.tags(free).contains("Abbonamento"))
+        assertEquals(listOf("Abbonamento"), MediasetLabels.tags(paid))
+        assertEquals("Trama", MediasetLabels.description(free))
+        assertTrue(MediasetLabels.description(paid)!!.contains("abbonamento o un noleggio"))
+    }
 }

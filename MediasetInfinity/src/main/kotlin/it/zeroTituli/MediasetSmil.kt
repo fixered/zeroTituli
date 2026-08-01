@@ -48,12 +48,19 @@ object MediasetSmil {
         // casi. Leggendolo per primo il ramo del token non veniva mai raggiunto: ogni
         // token scaduto passava per un blocco geografico, cioè per un errore definitivo,
         // e il nuovo login che il progetto promette non partiva mai.
-        when (exception.find(payload)?.groupValues?.get(1)) {
+        val declared = exception.find(payload)?.groupValues?.get(1)
+        when (declared) {
             null -> Unit
             "NoAssetTypeFormatMatches" -> return SmilResult.NoMatch
             "InvalidAuthToken", "InvalidToken", "TokenExpired" -> return SmilResult.TokenExpired
             "GeoLocationBlocked" -> return SmilResult.GeoBlocked
-            else -> return SmilResult.NoMatch
+            // `Unit` e non `return`: un nome di eccezione che non si conosce non è una
+            // risposta, è una cosa da guardare meglio. Con il `return` qui, un blocco
+            // geografico dichiarato con qualunque altro nome saltava l'euristica
+            // dell'indirizzo di cortesia che stava sotto e tornava `NoMatch`, cioè tre
+            // `assetTypes` provati a vuoto, un login rifatto per niente e alla fine
+            // "Contenuto non disponibile" invece di "Non disponibile in questa zona".
+            else -> Unit
         }
 
         // Senza eccezione dichiarata resta l'indirizzo: il cartello arriva con esito
@@ -61,6 +68,12 @@ object MediasetSmil {
         if (url.contains("/cortesia/") || url.contains("GEOLOCK")) return SmilResult.GeoBlocked
 
         if (url.contains("errorFiles")) return SmilResult.NoMatch
+
+        // Un'eccezione dichiarata che nessun ramo ha riconosciuto, con un indirizzo che non
+        // sembra un cartello: non è un flusso da mandare al lettore. Il ramo `else` di
+        // sopra lascia passare per arrivare all'euristica dell'indirizzo, non per fidarsi
+        // di un `src` che theplatform ha accompagnato con un errore.
+        if (declared != null) return SmilResult.NoMatch
 
         val path = url.substringBefore('?')
         val kind = when {

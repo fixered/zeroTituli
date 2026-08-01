@@ -148,9 +148,11 @@ class MediasetInfinity : MainAPI() {
         val name = head.brandTitle?.takeIf { it.isNotBlank() } ?: head.title ?: return null
 
         // Un marchio con una sola voce guardabile, e quella è un film, è un film: i promo
-        // che gli stanno attorno non lo trasformano in una serie da una puntata.
-        val playable = MediasetSeasons.playable(entries)
-        val onlyMovie = playable.singleOrNull()?.takeIf { it.programType == "movie" }
+        // che gli stanno attorno non lo trasformano in una serie da una puntata. La regola
+        // sta in `MediasetSeasons` perché guardare solo `programType` non bastava — il
+        // trailer di un film arriva tipizzato `movie` come il film — e perché così si
+        // prova senza dispositivo.
+        val onlyMovie = MediasetSeasons.onlyMovie(entries)
         if (onlyMovie != null) {
             // La voce è già in mano: passarla evita di richiederla al feed per `guid`.
             return loadSingle(onlyMovie.guid ?: return null, onlyMovie)
@@ -272,6 +274,8 @@ class MediasetInfinity : MainAPI() {
      */
     private suspend fun liveLink(callSign: String, callback: (ExtractorLink) -> Unit): Boolean {
         val label = MediasetLive.labelFor(callSign)
+        // Questi due `throw` finiscono nel log e **non** sotto gli occhi di chi guarda: il
+        // perché sta scritto per esteso su `vodLink`.
         val mediaUrl = liveApi.info(callSign, label)?.mediaUrl
             ?: throw ErrorLoadingException("Diretta non disponibile per $label")
         val manifest = liveApi.manifest(mediaUrl)
@@ -300,9 +304,23 @@ class MediasetInfinity : MainAPI() {
         isCasting: Boolean,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Ogni motivo per cui non parte ha il suo messaggio: un `false` secco lasciava
-        // l'utente davanti allo stesso errore generico sia fuori area, sia con la sessione
-        // scaduta, sia davanti a un contenuto da abbonamento — tre cose da fare diverse.
+        // Attenzione, e non è un dettaglio: questi quattro messaggi **non arrivano a chi
+        // guarda**. `APIRepository.loadLinks`, nella jar di CloudStream, avvolge la chiamata
+        // al plugin in un `try/catch (Throwable) { logError(t); return false }` — letto nel
+        // bytecode e non dedotto: la tabella delle eccezioni del metodo copre tutto il corpo
+        // con `java/lang/Throwable`, e il gestore chiama `ArchComponentExtKt.logError` e
+        // restituisce `false`. Quindi l'utente vede lo stesso errore generico di un `false`
+        // secco, e l'unica cosa che cambia è una riga in più nel log.
+        //
+        // Restano comunque, perché quella riga di log è il solo posto dove fuori area,
+        // sessione scaduta e abbonamento si distinguono, e perché tornare `false` da qui non
+        // porterebbe niente in più. Quello che invece si vede davvero sta prima di premere
+        // play: `load` passa per `safeApiCall`, che di `ErrorLoadingException` fa un
+        // `Resource.Failure` con il suo messaggio (anche questo letto nel bytecode di
+        // `ArchComponentExtKt.safeFail`), e la scheda di un contenuto a pagamento porta già
+        // il tag "Abbonamento" in cima e l'avviso in testa alla trama — vedi
+        // `MediasetLabels`, che legge `mediasetprogram$channelsRights` dalla stessa voce di
+        // feed su cui si costruisce la scheda.
         val stream = when (val result = api.vod(guid)) {
             is VodResult.Ok -> result.stream
             VodResult.GeoBlocked ->

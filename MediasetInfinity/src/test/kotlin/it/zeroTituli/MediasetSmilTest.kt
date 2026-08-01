@@ -100,6 +100,30 @@ class MediasetSmilTest {
     }
 
     @Test
+    fun `un nome di eccezione sconosciuto non copre il video di cortesia`() {
+        // Il ramo `else` del `when` faceva `return NoMatch`, cioè si fermava prima
+        // dell'euristica dell'indirizzo: un blocco geografico dichiarato con un nome
+        // qualunque — theplatform ne cambia le sigle senza avvisare — non arrivava più al
+        // riconoscimento del cartello di cortesia che lo prendeva da sempre. Per chi guarda
+        // da fuori l'Italia il conto era: tre `assetTypes` provati a vuoto, un login rifatto
+        // per niente, e alla fine "Contenuto non disponibile" al posto di "Non disponibile in
+        // questa zona".
+        val smil = """<smil><body><seq><ref src="https://vod06-mediaset-it.akamaized.net/cortesia/GEOLOCK-DEF_2.mp4">""" +
+            """<param name="exception" value="GeoBlockingNotAllowed"/></ref></seq></body></smil>"""
+        assertEquals(SmilResult.GeoBlocked, MediasetSmil.read(smil))
+    }
+
+    @Test
+    fun `un nome di eccezione sconosciuto senza cartello non diventa un flusso`() {
+        // L'altro verso della stessa modifica: lasciar passare il ramo `else` serve ad
+        // arrivare all'indirizzo, non a fidarsi di un `src` che theplatform ha accompagnato
+        // con un errore. Senza questo controllo il lettore avrebbe provato ad aprirlo.
+        val smil = """<smil><body><seq><ref src="https://cdn/qualcosa/hr_wv_mpl.mpd">""" +
+            """<param name="exception" value="QualcosaDiNuovo"/></ref></seq></body></smil>"""
+        assertEquals(SmilResult.NoMatch, MediasetSmil.read(smil))
+    }
+
+    @Test
     fun `errorFiles senza exception torna NoMatch`() {
         val smil =
             """<smil><body><seq><ref src="http://link.theplatform.eu/s/errorFiles/Unavailable.flv"/></ref></seq></body></smil>"""

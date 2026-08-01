@@ -6,6 +6,22 @@ import org.junit.Test
 
 class MediasetUrlsTest {
 
+    /**
+     * I soli campi che il parametro `fields=` chiede, nell'ordine in cui li chiede.
+     *
+     * Serve perché `assertTrue(url.contains("mediasetprogram%24brandTitle"))` non provava
+     * niente: quella stessa sottostringa sta anche in
+     * `sort=mediasetprogram%24brandTitle%7Casc`, nello stesso indirizzo, quindi togliendo
+     * `brandTitle` dalla proiezione il test passava comunque — e il nome sarebbe sparito da
+     * ogni riquadro del catalogo. Leggendo il valore del parametro e confrontandolo per
+     * intero, l'unico modo di far passare l'asserzione è che il campo sia proprio lì.
+     */
+    private fun fieldsOf(url: String): List<String> =
+        url.substringAfter("&fields=", "")
+            .substringBefore("&")
+            .split("%2C")
+            .filter { it.isNotBlank() }
+
     @Test
     fun `la prima pagina parte da uno`() {
         // theplatform conta le voci da 1 e vuole gli estremi inclusi.
@@ -65,19 +81,111 @@ class MediasetUrlsTest {
     fun `le righe di catalogo chiedono solo i campi che il riquadro legge`() {
         // Alzare le voci per pagina senza tagliare i campi peggiorerebbe la memoria, che è
         // già il problema della home. Se un riquadro inizia a leggere un campo nuovo, va
-        // aggiunto alla lista: qui si controlla che ci siano tutti quelli che legge oggi.
+        // aggiunto alla lista: qui si controlla che ci siano tutti quelli che legge oggi, e
+        // nessuno in più. Il confronto è sul valore di `fields=`, non sull'indirizzo intero:
+        // `url.contains("mediasetprogram%24brandTitle")` passava anche senza il campo,
+        // perché quella sottostringa sta pure nel `sort=` di questa stessa query.
         val url = MediasetUrls.alphabetical("Fiction", page = 1)
-        listOf(
-            "guid",
-            "title",
-            "programType",
-            "thumbnails",
-            "mediasetprogram%24brandId",
-            "mediasetprogram%24brandTitle",
-        ).forEach { field ->
-            assertTrue("manca il campo $field in $url", url.contains(field))
+        assertTrue("manca del tutto la proiezione in $url", url.contains("&fields="))
+        assertEquals(
+            listOf(
+                "guid",
+                "title",
+                "programType",
+                "thumbnails",
+                "mediasetprogram%24brandId",
+                "mediasetprogram%24brandTitle",
+            ),
+            fieldsOf(url)
+        )
+        // La stessa proiezione, identica, sulle altre due righe di catalogo.
+        assertEquals(fieldsOf(url), fieldsOf(MediasetUrls.byGenre("Commedia", page = 1)))
+        assertEquals(fieldsOf(url), fieldsOf(MediasetUrls.byCategory("Fiction", page = 1)))
+    }
+
+    @Test
+    fun `la query per marchio chiede solo i campi che la scheda legge`() {
+        // Era l'unica query di catalogo senza proiezione, e la più pesante: "La promessa"
+        // sono 2699 voci col filtro `episode|movie|extra`, cioè 27 pagine da 100 aperte in
+        // fila all'apertura della scheda. Una pagina non proiettata misurava 1 170 623 byte
+        // sul feed vero, con questa proiezione 959 336.
+        //
+        // Ogni campo qui dentro ha qualcuno che lo legge su quella strada, e i campi che
+        // nessuno legge — `media`, `seriesId`, `tvSeasonId`, i sottomarchi, `editorialType`,
+        // `pageUrl` — devono restare fuori: il confronto è per intero proprio per questo.
+        val url = MediasetUrls.byBrand("100012714", page = 1)
+        assertTrue("manca del tutto la proiezione in $url", url.contains("&fields="))
+        assertEquals(
+            listOf(
+                // `MediasetSeasons.arrange` (chiave e scarto dei doppioni) e la chiave VOD
+                "guid",
+                // nome della puntata, e ordine a pari numero d'episodio
+                "title",
+                // `FeedEntry.plot`
+                "description",
+                "longDescription",
+                // extra/film/puntata: stagione degli extra e decisione film-o-serie
+                "programType",
+                // intestazione della scheda
+                "year",
+                // durata di riserva quando `mediasetprogram$duration` manca
+                "runtime",
+                // la numerazione
+                "tvSeasonNumber",
+                "tvSeasonEpisodeNumber",
+                // cast (`addActors`): col sottocampo, perche` `fields=credits` liscio
+                // fa rispondere al feed `"credits": []` e il cast sparirebbe in silenzio
+                "credits.personName",
+                // semaforo dell'età (`ageRating`)
+                "ratings",
+                // la categoria dei consigliati e i generi di riserva
+                "tags",
+                // `MediasetImages.still`, `poster`, `background`
+                "thumbnails",
+                // il marchio da escludere dai consigliati
+                "mediasetprogram%24brandId",
+                // il nome della scheda
+                "mediasetprogram%24brandTitle",
+                // durata mostrata, e la regola che distingue un film dal suo trailer
+                "mediasetprogram%24duration",
+                // i tag
+                "mediasetprogram%24genres",
+                // il diritto AVOD: tag "Abbonamento" e avviso nella trama
+                "mediasetprogram%24channelsRights",
+            ),
+            fieldsOf(url)
+        )
+        // Il filtro e il totale non devono essersi persi mettendo la proiezione.
+        assertTrue(url.contains("byProgramType=episode%7Cmovie%7Cextra"))
+        assertTrue(url.contains("count=true"))
+    }
+
+    @Test
+    fun `la proiezione della scheda copre tutti i campi che la scheda legge`() {
+        // Contro-prova dell'altro verso: qui l'elenco non è copiato dalla produzione ma
+        // scritto guardando chi legge cosa in `MediasetSeasons`, `MediasetImages`,
+        // `MediasetLabels` e nei blocchi `newEpisode`/`newTvSeriesLoadResponse`. Se un
+        // giorno un campo viene tolto dalla proiezione "perché non serve", questo test dice
+        // di chi era.
+        val fields = fieldsOf(MediasetUrls.byBrand("1", page = 1))
+        mapOf(
+            "guid" to "MediasetSeasons.arrange scarta le voci senza guid",
+            "title" to "il nome della puntata",
+            "longDescription" to "FeedEntry.plot",
+            "programType" to "MediasetSeasons.playable e features",
+            "tvSeasonNumber" to "la stagione",
+            "tvSeasonEpisodeNumber" to "il numero d'episodio",
+            "thumbnails" to "MediasetImages.still/poster/background",
+            "credits.personName" to "addActors",
+            "ratings" to "FeedEntry.ageRating",
+            "tags" to "FeedEntry.categories, per i consigliati",
+            "mediasetprogram%24brandTitle" to "il nome della scheda",
+            "mediasetprogram%24brandId" to "il marchio escluso dai consigliati",
+            "mediasetprogram%24duration" to "MediasetSeasons.features e durationMinutes",
+            "mediasetprogram%24channelsRights" to "FeedEntry.isFree, cioè MediasetLabels",
+        ).forEach { (field, reader) ->
+            assertTrue("manca $field, che serve a: $reader", fields.contains(field))
         }
-        assertTrue(url.contains("fields="))
     }
 
     @Test

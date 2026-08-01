@@ -20,8 +20,14 @@ object MediasetLabels {
      * extra è il numero 999, scelto per farla restare in fondo, e senza un nome il
      * selettore la annuncia come "Season 999".
      */
-    fun seasonName(season: Int): String =
-        if (season == MediasetSeasons.EXTRAS_SEASON) "Extra e speciali" else "Stagione $season"
+    fun seasonName(season: Int): String = when (season) {
+        MediasetSeasons.EXTRAS_SEASON -> "Extra e speciali"
+        // Le voci vere che il feed manda senza numero di stagione — i film, sempre.
+        // Portavano anche loro il nome degli extra, cioè un film intero annunciato come
+        // materiale di contorno: due casi diversi, due nomi.
+        MediasetSeasons.UNNUMBERED_SEASON -> "Senza stagione"
+        else -> "Stagione $season"
+    }
 
     /** Alla trama si aggiunge l'avviso quando il contenuto non è gratuito. */
     fun description(entry: FeedEntry): String? {

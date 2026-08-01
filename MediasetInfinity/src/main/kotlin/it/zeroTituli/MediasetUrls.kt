@@ -75,6 +75,66 @@ object MediasetUrls {
         "mediasetprogram\$brandTitle",
     ).joinToString(",")
 
+    /**
+     * I campi che la scheda di un programma legge, e nessun altro.
+     *
+     * Sono più di quelli di un riquadro perché da questa sola risposta `loadBrand` ricava
+     * due cose: l'elenco delle puntate e l'intestazione della scheda. Uno per uno, chi li
+     * legge:
+     * - `guid`: la chiave di riproduzione di ogni puntata, e lo scarto dei doppioni in
+     *   `MediasetSeasons.arrange`;
+     * - `title`: il nome della puntata, e l'ordine a pari numero d'episodio;
+     * - `description`, `longDescription`: la trama, via `FeedEntry.plot`;
+     * - `programType`: extra, film o puntata, cioè la stagione degli extra e la decisione
+     *   fra scheda film e scheda serie;
+     * - `year`, `ratings`: anno e semaforo dell'età dell'intestazione;
+     * - `credits.personName`: il cast. Il sottocampo non è un vezzo: chiedendo `credits`
+     *   liscio il feed risponde `"credits": []` — verificato sulla voce F312561801000104,
+     *   22 nomi senza proiezione e zero con `fields=credits` — e la scheda avrebbe perso il
+     *   cast in silenzio. `creditType` non lo legge nessuno, quindi resta fuori;
+     * - `runtime`: la durata di riserva quando `mediasetprogram$duration` manca;
+     * - `tvSeasonNumber`, `tvSeasonEpisodeNumber`: la numerazione;
+     * - `tags`: la categoria da cui nascono i consigliati, e i generi di riserva;
+     * - `thumbnails`: le copertine (`MediasetImages.still`, `poster`, `background`);
+     * - `mediasetprogram$brandId`: il marchio da escludere dai consigliati;
+     * - `mediasetprogram$brandTitle`: il nome della scheda;
+     * - `mediasetprogram$duration`: la durata mostrata, e la regola che distingue un film
+     *   dal suo trailer (`MediasetSeasons.features`);
+     * - `mediasetprogram$genres`: i tag;
+     * - `mediasetprogram$channelsRights`: il diritto AVOD, cioè l'etichetta "Abbonamento"
+     *   e l'avviso nella trama (`MediasetLabels`).
+     *
+     * Restano fuori `media`, `seriesId`, `tvSeasonId`, i sottomarchi, `editorialType` e
+     * `pageUrl`: nessuno di questi viene letto su questa strada.
+     *
+     * Misura vera su "La promessa" (`brandId=100012714`, 2699 voci con questo filtro): una
+     * pagina da 100 voci passa da 1 170 623 a 959 336 byte, cioè 31,6 MB di scheda che
+     * diventano 25,9. Il taglio è del 18% e non di più perché `thumbnails` da solo pesa
+     * 768 388 byte del totale, e il feed rifiuta di restringerlo:
+     * `fields=thumbnails.url` risponde `BadParameterException`. Quel che resta, quindi,
+     * sono quasi solo immagini che la scheda usa davvero.
+     */
+    private val BRAND_FIELDS = listOf(
+        "guid",
+        "title",
+        "description",
+        "longDescription",
+        "programType",
+        "year",
+        "runtime",
+        "tvSeasonNumber",
+        "tvSeasonEpisodeNumber",
+        "credits.personName",
+        "ratings",
+        "tags",
+        "thumbnails",
+        "mediasetprogram\$brandId",
+        "mediasetprogram\$brandTitle",
+        "mediasetprogram\$duration",
+        "mediasetprogram\$genres",
+        "mediasetprogram\$channelsRights",
+    ).joinToString(",")
+
     /** Il conto theplatform di Mediaset, dentro gli indirizzi di serie e stagioni. */
     private const val ACCOUNT_GUID = "2702976343"
     private const val PROGRAM_BASE =
@@ -107,6 +167,10 @@ object MediasetUrls {
             // `MediasetSeasons.arrange` quando sono tutti arrivati.
             "range" to range(page, perPage),
             "count" to "true",
+            // L'unica query di catalogo che era rimasta senza proiezione, e quella che
+            // scarica di più: "La promessa" sono 2699 voci, cioè 27 pagine da 100 aperte
+            // in fila ogni volta che si apre quella scheda, su un telefono da `minSdk 21`.
+            "fields" to BRAND_FIELDS,
         )
     )
 
