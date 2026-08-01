@@ -1,5 +1,6 @@
 package it.zeroTituli
 
+import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
@@ -7,6 +8,7 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SearchResponseList
+import com.lagradost.cloudstream3.SeasonData
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.mainPageOf
@@ -46,61 +48,48 @@ class MediasetInfinity : MainAPI() {
     )
 
     private val api = MediasetApi()
-    private val liveApi = MediasetLiveApi(api)
+    private val liveApi = MediasetLiveApi()
     private val catalog = MediasetCatalog(api, liveApi)
 
     /**
      * Le righe della home. Il `data` dice a `getMainPage` cosa caricare, il nome della
      * riga arriva dal contenuto: le sezioni portano i titoli scelti dalla redazione.
+     *
+     * Le sezioni escono dalla tabella di `MediasetSections`, così non si aggiunge una
+     * riga qui e si dimentica la categoria di ripiego là. Manca la sezione "Serie TV" che
+     * il progetto elencava: la sua pagina non esiste, e il perché sta in quella tabella.
      */
-    override val mainPage = mainPageOf(
-        "live" to "Dirette",
-        "section:fiction" to "Sezione",
-        "section:cinema" to "Sezione",
-        "section:programmitv" to "Sezione",
-        "section:kids" to "Sezione",
-        "section:documentari" to "Sezione",
-        "section:news-e-sport" to "Sezione",
-        "genre:Commedia" to "Genere",
-        "genre:Thriller" to "Genere",
-        "genre:Documentari" to "Genere",
-        "genre:Serie Tv" to "Genere",
-        "az:Fiction" to "Alfabetico",
-        "az:Cinema" to "Alfabetico",
-        "az:Programmi Tv" to "Alfabetico",
-        "az:Kids" to "Alfabetico",
-        "az:Documentari" to "Alfabetico",
-    )
+    override val mainPage = mainPageOf(*homeRows().toTypedArray())
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val data = request.data
-        val argument = data.substringAfter(':', "")
-
-        return when {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? =
+        when (val row = MediasetKeys.row(request.data)) {
             // Le dirette non hanno pagine: sono dodici canali.
-            data == "live" -> if (page > 1) null else with(catalog) {
+            MediasetKeys.Row.Live -> if (page > 1) null else with(catalog) {
                 liveRow()?.let { newHomePageResponse(it, hasNext = false) }
             }
 
-            data.startsWith("section:") -> {
-                if (page > 1) return null
-                val label = MediasetSections.SLUGS.firstOrNull { it.first == argument }?.second
-                    ?: argument
-                val rows = with(catalog) { sectionRows(argument, label) }
-                if (rows.isEmpty()) null else newHomePageResponse(rows, hasNext = false)
+            is MediasetKeys.Row.Section -> {
+                // Uno slug fuori tabella non ha né nome né categoria di ripiego: la riga
+                // si salta, invece di servire Fiction sotto un'altra intestazione.
+                val section = MediasetSections.sectionOf(row.slug)
+                if (page > 1 || section == null) {
+                    null
+                } else {
+                    val rows = with(catalog) { sectionRows(section) }
+                    if (rows.isEmpty()) null else newHomePageResponse(rows, hasNext = false)
+                }
             }
 
-            data.startsWith("genre:") -> with(catalog) {
-                genreRow(argument, page)?.let { newHomePageResponse(it, hasNext = true) }
+            is MediasetKeys.Row.Genre -> with(catalog) {
+                genreRow(row.name, page)?.let { newHomePageResponse(it, hasNext = true) }
             }
 
-            data.startsWith("az:") -> with(catalog) {
-                alphabeticalRow(argument, page)?.let { newHomePageResponse(it, hasNext = true) }
+            is MediasetKeys.Row.Az -> with(catalog) {
+                alphabeticalRow(row.category, page)?.let { newHomePageResponse(it, hasNext = true) }
             }
 
-            else -> null
+            null -> null
         }
-    }
 
     override suspend fun search(query: String): List<SearchResponse> = with(catalog) {
         api.entries(MediasetUrls.search(query, page = 1))
@@ -117,33 +106,26 @@ class MediasetInfinity : MainAPI() {
         newSearchResponseList(items, hasNext = items.isNotEmpty())
     }
 
-    override suspend fun load(url: String): LoadResponse? {
-        val key = key(url)
-        return when {
-            key.startsWith("live:") -> loadLive(key.substringAfter(':'))
-            key.startsWith("series:") -> loadSeries(key.substringAfter(':'))
-            key.startsWith("brand:") -> loadBrand(key.substringAfter(':'))
-            key.startsWith("guid:") -> loadSingle(key.substringAfter(':'))
-            else -> null
-        }
-    }
-
     /**
      * Le schede non hanno un indirizzo web: l'identificativo è una chiave tipo
-     * `brand:100012714`. Se un preferito salvato porta davanti l'indirizzo del sito —
-     * capita quando una `new*SearchResponse` viene costruita senza `fix = false` — la
-     * chiave si recupera invece di aprire una scheda vuota.
+     * `brand:100012714`, e a comporla e a leggerla ci pensa `MediasetKeys`.
      */
-    private fun key(url: String): String =
-        url.removePrefix("$mainUrl/").removePrefix(mainUrl)
+    override suspend fun load(url: String): LoadResponse? =
+        when (val card = MediasetKeys.card(MediasetKeys.strip(url, mainUrl))) {
+            is MediasetKeys.Card.Live -> loadLive(card.callSign)
+            is MediasetKeys.Card.Series -> loadSeries(card.seriesGuid)
+            is MediasetKeys.Card.Brand -> loadBrand(card.brandId)
+            is MediasetKeys.Card.Single -> loadSingle(card.guid)
+            null -> null
+        }
 
     private suspend fun loadLive(callSign: String): LoadResponse? {
         val label = MediasetLive.labelFor(callSign)
         val info = liveApi.info(callSign, label) ?: return null
         return newLiveStreamLoadResponse(
             name = info.title,
-            url = "live:$callSign",
-            dataUrl = "live:$callSign"
+            url = MediasetKeys.live(callSign),
+            dataUrl = MediasetKeys.live(callSign)
         ) {
             this.posterUrl = info.logo
             this.plot = info.nowPlaying?.let { "Ora in onda: $it" }
@@ -160,15 +142,23 @@ class MediasetInfinity : MainAPI() {
 
     private suspend fun loadBrand(brandId: String): LoadResponse? {
         val entries = allEpisodes(brandId)
-        val head = entries.firstOrNull() ?: return null
+        // Non la prima voce del feed: con gli extra in mezzo, la prima può essere un
+        // promo, e la scheda prenderebbe titolo e copertina da un trailer.
+        val head = MediasetSeasons.head(entries) ?: return null
         val name = head.brandTitle?.takeIf { it.isNotBlank() } ?: head.title ?: return null
 
-        // Un solo episodio senza numerazione è un film, non una serie da una puntata.
-        val slots = MediasetSeasons.arrange(entries)
-        if (slots.size == 1 && head.programType == "movie") return loadSingle(head.guid ?: return null)
+        // Un marchio con una sola voce guardabile, e quella è un film, è un film: i promo
+        // che gli stanno attorno non lo trasformano in una serie da una puntata.
+        val playable = MediasetSeasons.playable(entries)
+        val onlyMovie = playable.singleOrNull()?.takeIf { it.programType == "movie" }
+        if (onlyMovie != null) {
+            // La voce è già in mano: passarla evita di richiederla al feed per `guid`.
+            return loadSingle(onlyMovie.guid ?: return null, onlyMovie)
+        }
 
+        val slots = MediasetSeasons.arrange(entries)
         val episodes = slots.map { slot ->
-            newEpisode("vod:${slot.entry.guid}") {
+            newEpisode(MediasetKeys.vod(slot.entry.guid.orEmpty())) {
                 this.name = slot.entry.title
                 this.season = slot.season
                 this.episode = slot.episode
@@ -178,23 +168,42 @@ class MediasetInfinity : MainAPI() {
             }
         }
 
-        return newTvSeriesLoadResponse(name, "brand:$brandId", TvType.TvSeries, episodes) {
+        val recommended = recommendationsFor(head)
+
+        return newTvSeriesLoadResponse(
+            name,
+            MediasetKeys.brand(brandId),
+            TvType.TvSeries,
+            episodes
+        ) {
             this.posterUrl = MediasetImages.poster(head)
             this.backgroundPosterUrl = MediasetImages.background(head)
             this.plot = MediasetLabels.description(head)
             this.tags = MediasetLabels.tags(head)
             this.year = head.year
             this.contentRating = head.ageRating
+            // Senza nomi il selettore annuncerebbe "Season 999" per gli extra, che è il
+            // numero scelto per tenerli in fondo, non qualcosa da mostrare.
+            this.seasonNames = slots.map { it.season }.distinct().sorted().map { season ->
+                SeasonData(season, MediasetLabels.seasonName(season))
+            }
+            this.recommendations = recommended
             addActors(head.actors)
         }
     }
 
-    private suspend fun loadSingle(guid: String): LoadResponse? {
-        val entry = api.entry(guid) ?: return null
+    private suspend fun loadSingle(guid: String, known: FeedEntry? = null): LoadResponse? {
+        val entry = known ?: api.entry(guid) ?: return null
         val name = entry.title?.takeIf { it.isNotBlank() }
             ?: entry.brandTitle
             ?: return null
-        return newMovieLoadResponse(name, "guid:$guid", TvType.Movie, dataUrl = "vod:$guid") {
+        val recommended = recommendationsFor(entry)
+        return newMovieLoadResponse(
+            name,
+            MediasetKeys.single(guid),
+            TvType.Movie,
+            dataUrl = MediasetKeys.vod(guid)
+        ) {
             this.posterUrl = MediasetImages.poster(entry)
             this.backgroundPosterUrl = MediasetImages.background(entry)
             this.plot = MediasetLabels.description(entry)
@@ -202,8 +211,19 @@ class MediasetInfinity : MainAPI() {
             this.year = entry.year
             this.duration = entry.durationMinutes
             this.contentRating = entry.ageRating
+            this.recommendations = recommended
             addActors(entry.actors)
         }
+    }
+
+    /**
+     * I consigliati della scheda. Se la voce non porta una categoria non si inventa un
+     * legame: la riga non compare, come le altre righe vuote.
+     */
+    private suspend fun recommendationsFor(entry: FeedEntry): List<SearchResponse> {
+        val category = entry.categories.firstOrNull() ?: return emptyList()
+        return runCatching { with(catalog) { recommendations(category, entry.brandId) } }
+            .getOrDefault(emptyList())
     }
 
     /**
@@ -215,9 +235,19 @@ class MediasetInfinity : MainAPI() {
         val all = mutableListOf<FeedEntry>()
         var page = 1
         while (page <= MAX_EPISODE_PAGES) {
-            val batch = api.entries(MediasetUrls.byBrand(brandId, page))
+            val response = api.page(MediasetUrls.byBrand(brandId, page)) ?: break
+            val batch = response.entries
+            if (batch.isEmpty()) break
             all += batch
-            if (batch.size < EPISODES_PER_PAGE) break
+
+            // `count=true` fa dire al feed quante voci ha in tutto: è il limite giusto del
+            // ciclo. Prima si confrontava la dimensione del blocco con una costante scritta
+            // in questo file, mentre la richiesta usava il valore di default dell'altro:
+            // due numeri uguali per combinazione, e cambiarne uno avrebbe fatto fermare le
+            // serie lunghe alla prima pagina, in silenzio.
+            val total = response.totalResults
+            if (total != null && all.size >= total) break
+            if (total == null && batch.size < MediasetUrls.EPISODES_PER_PAGE) break
             page++
         }
         return all
@@ -229,9 +259,11 @@ class MediasetInfinity : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        if (data.startsWith("live:")) return liveLink(data.substringAfter(':'), callback)
-        if (data.startsWith("vod:")) return vodLink(data.substringAfter(':'), isCasting, callback)
-        return false
+        return when (val key = MediasetKeys.data(data)) {
+            is MediasetKeys.Data.Live -> liveLink(key.callSign, callback)
+            is MediasetKeys.Data.Vod -> vodLink(key.guid, isCasting, callback)
+            null -> false
+        }
     }
 
     /**
@@ -240,8 +272,10 @@ class MediasetInfinity : MainAPI() {
      */
     private suspend fun liveLink(callSign: String, callback: (ExtractorLink) -> Unit): Boolean {
         val label = MediasetLive.labelFor(callSign)
-        val mediaUrl = liveApi.info(callSign, label)?.mediaUrl ?: return false
-        val manifest = liveApi.manifest(mediaUrl) ?: return false
+        val mediaUrl = liveApi.info(callSign, label)?.mediaUrl
+            ?: throw ErrorLoadingException("Diretta non disponibile per $label")
+        val manifest = liveApi.manifest(mediaUrl)
+            ?: throw ErrorLoadingException("Il flusso di $label non si è risolto")
         callback(
             newExtractorLink(
                 source = name,
@@ -266,10 +300,21 @@ class MediasetInfinity : MainAPI() {
         isCasting: Boolean,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Ogni motivo per cui non parte ha il suo messaggio: un `false` secco lasciava
+        // l'utente davanti allo stesso errore generico sia fuori area, sia con la sessione
+        // scaduta, sia davanti a un contenuto da abbonamento — tre cose da fare diverse.
         val stream = when (val result = api.vod(guid)) {
             is VodResult.Ok -> result.stream
-            VodResult.GeoBlocked -> return false
-            VodResult.NotAvailable -> return false
+            VodResult.GeoBlocked ->
+                throw ErrorLoadingException("Non disponibile in questa zona")
+            VodResult.TokenExpired ->
+                throw ErrorLoadingException("Sessione Mediaset scaduta: riprova fra un momento")
+            VodResult.SubscriptionRequired ->
+                throw ErrorLoadingException(
+                    "Serve un abbonamento o un noleggio Mediaset Infinity"
+                )
+            VodResult.NotAvailable ->
+                throw ErrorLoadingException("Contenuto non disponibile")
         }
 
         val label = if (isCasting) "Widevine — solo sul telefono" else "Widevine"
@@ -289,8 +334,29 @@ class MediasetInfinity : MainAPI() {
     }
 
     private companion object {
-        const val EPISODES_PER_PAGE = 100
         /** Cento pagine da cento: diecimila episodi, oltre i quali non serve andare. */
         const val MAX_EPISODE_PAGES = 100
+
+        /**
+         * Le sei categorie di `azListing`, quelle che l'indice alfabetico conosce.
+         * "Calcio e Sport" era l'unica fuori dall'elenco, senza motivo.
+         */
+        val AZ_CATEGORIES = listOf(
+            "Fiction",
+            "Cinema",
+            "Programmi Tv",
+            "Kids",
+            "Documentari",
+            "Calcio e Sport",
+        )
+
+        /** I quattro gruppi di righe che il progetto vuole, in quest'ordine. */
+        fun homeRows(): List<Pair<String, String>> = buildList {
+            add(MediasetKeys.LIVE_ROW to "Dirette")
+            MediasetSections.SLUGS.forEach { add(MediasetKeys.section(it.slug) to "Sezione") }
+            listOf("Commedia", "Thriller", "Documentari", "Serie Tv")
+                .forEach { add(MediasetKeys.genre(it) to "Genere") }
+            AZ_CATEGORIES.forEach { add(MediasetKeys.az(it) to "Alfabetico") }
+        }
     }
 }

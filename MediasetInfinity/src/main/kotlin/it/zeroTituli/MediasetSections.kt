@@ -13,6 +13,16 @@ data class SectionItem(
 data class SectionRow(val title: String, val items: List<SectionItem>)
 
 /**
+ * Una sezione del sito: lo slug della pagina, il nome da mostrare nella home e la
+ * categoria del feed a cui ripiegare quando il markup cambia.
+ *
+ * Le tre cose stavano in tre posti diversi — l'elenco delle righe, la tabella dei nomi
+ * e una `when` che traduceva slug in categoria — e chi aggiungeva una sezione ne
+ * aggiornava due su tre.
+ */
+data class MediasetSection(val slug: String, val label: String, val feedCategory: String)
+
+/**
  * Le righe delle pagine sezione, lette dal markup.
  *
  * L'API che le compone (`ares-be...`) non è raggiungibile da fuori, quindi si legge
@@ -21,17 +31,59 @@ data class SectionRow(val title: String, val items: List<SectionItem>)
  */
 object MediasetSections {
 
-    /** Le sezioni del sito, con il nome da mostrare nella home. */
-    val SLUGS = listOf(
-        "fiction" to "Fiction",
-        "cinema" to "Cinema",
-        "programmitv" to "Programmi TV",
-        "kids" to "Kids",
-        "documentari" to "Documentari",
-        "news-e-sport" to "News e Sport",
+    /**
+     * `<script ...>` fino al suo `</script>`. Il punto deve valere anche il capo di riga,
+     * perché lo stato di Next.js è un blocco lungo su più righe; la chiusura è pigra, o
+     * il primo `<script>` si porterebbe via tutta la pagina fino all'ultimo.
+     */
+    private val SCRIPT = Regex(
+        """<script\b[^>]*>.*?</script>""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
     )
 
-    fun read(html: String): List<SectionRow> {
+    /**
+     * Le sezioni del sito. Le categorie del feed non si chiamano come gli slug: la
+     * pagina è `/programmitv`, la categoria è `Programmi Tv`, e `/news-e-sport` pesca da
+     * `Calcio e Sport`.
+     *
+     * Manca `serie-tv`, che il progetto elencava fra le sezioni: la pagina non esiste
+     * (`https://mediasetinfinity.mediaset.it/serie-tv` risponde 404) e nemmeno
+     * `azListing` conosce una categoria "Serie Tv". Del sito esistono solo gli indirizzi
+     * dei singoli programmi (`/serie-tv/themiddle_SE000000002712`). Quel contenuto resta
+     * raggiungibile dalla riga di genere "Serie Tv", che il feed serve davvero.
+     */
+    val SLUGS = listOf(
+        MediasetSection("fiction", "Fiction", "Fiction"),
+        MediasetSection("cinema", "Cinema", "Cinema"),
+        MediasetSection("programmitv", "Programmi TV", "Programmi Tv"),
+        MediasetSection("kids", "Kids", "Kids"),
+        MediasetSection("documentari", "Documentari", "Documentari"),
+        MediasetSection("news-e-sport", "News e Sport", "Calcio e Sport"),
+    )
+
+    /**
+     * Uno slug che non è in tabella non ha un ripiego: chi chiama salta la riga invece
+     * di servire Fiction sotto l'intestazione di un'altra sezione.
+     */
+    fun sectionOf(slug: String): MediasetSection? = SLUGS.firstOrNull { it.slug == slug }
+
+    /**
+     * Le pagine sezione sono Next.js: nel campione la Fiction pesa 6 020 473 byte, di
+     * cui 3 614 867 (il 60%) stanno dentro `<script>` che il parser non guarda
+     * nemmeno — è lo stato dell'applicazione, non markup. Buttarli prima di `Jsoup.parse`
+     * risparmia all'albero DOM più della metà del lavoro e della memoria, e su
+     * `minSdk 21`, con sei righe di sezione nella home, quella metà si sente.
+     */
+    fun stripScripts(html: String): String = SCRIPT.replace(html, "")
+
+    fun read(html: String): List<SectionRow> = parse(stripScripts(html))
+
+    /**
+     * La lettura vera, senza lo sfoltimento: serve solo al test, che confronta le righe
+     * trovate nel markup intero con quelle trovate in quello sfoltito. Se un giorno
+     * `stripScripts` mangiasse una riga, quel confronto lo direbbe.
+     */
+    internal fun parse(html: String): List<SectionRow> {
         if (html.isBlank()) return emptyList()
         val document = runCatching { Jsoup.parse(html) }.getOrNull() ?: return emptyList()
 

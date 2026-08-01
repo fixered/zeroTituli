@@ -19,12 +19,65 @@ class MediasetUrlsTest {
     }
 
     @Test
-    fun `la query per marchio filtra e ordina`() {
+    fun `la query per marchio chiede episodi film ed extra`() {
         val url = MediasetUrls.byBrand("100012714", page = 1)
         assertTrue(url.startsWith(MediasetUrls.FEED))
         assertTrue(url.contains("form=cjson"))
         assertTrue(url.contains("byCustomValue=%7BbrandId%7D%7B100012714%7D"))
         assertTrue(url.contains("range=1-100"))
+
+        // Il filtro è la cosa che questo test esiste per guardare. Con `byProgramType=episode`
+        // da solo, la scheda di un film tornava vuota — verificato sul feed vero: il marchio
+        // 100002609 ("Il quarto Re") dava 0 voci con `episode` e 1 con questo filtro — e gli
+        // extra non arrivavano mai, quindi la stagione dedicata non si riempiva mai.
+        assertEquals("episode|movie|extra", MediasetUrls.BRAND_PROGRAM_TYPES)
+        assertTrue(
+            "il filtro deve lasciar passare anche film ed extra: $url",
+            url.contains("byProgramType=episode%7Cmovie%7Cextra")
+        )
+        // Il totale serve al ciclo che scarica le puntate per sapere quando fermarsi.
+        assertTrue(url.contains("count=true"))
+    }
+
+    @Test
+    fun `la seconda pagina del marchio parte dove finisce la prima`() {
+        // Il ciclo che scarica le puntate chiede pagine con lo stesso `perPage` della
+        // costante: se i due numeri divergessero, le serie lunghe si fermerebbero alla
+        // prima pagina in silenzio.
+        assertEquals(100, MediasetUrls.EPISODES_PER_PAGE)
+        assertTrue(MediasetUrls.byBrand("1", page = 2).contains("range=101-200"))
+    }
+
+    @Test
+    fun `le righe di catalogo chiedono abbastanza voci per mostrare piu programmi`() {
+        // Il feed elenca episodi, non programmi, e la riga tiene un riquadro per marchio:
+        // con 40 voci la Fiction dalla A alla Z mostrava 5 programmi (misurato sul feed
+        // vero), con 200 ne mostra 19.
+        assertEquals(200, MediasetUrls.CARDS_PER_PAGE)
+        assertTrue(MediasetUrls.alphabetical("Fiction", page = 1).contains("range=1-200"))
+        assertTrue(MediasetUrls.byGenre("Commedia", page = 1).contains("range=1-200"))
+        assertTrue(MediasetUrls.byCategory("Fiction", page = 1).contains("range=1-200"))
+        // Seconda pagina: gli estremi devono seguire il passo nuovo, non quello vecchio.
+        assertTrue(MediasetUrls.alphabetical("Fiction", page = 2).contains("range=201-400"))
+    }
+
+    @Test
+    fun `le righe di catalogo chiedono solo i campi che il riquadro legge`() {
+        // Alzare le voci per pagina senza tagliare i campi peggiorerebbe la memoria, che è
+        // già il problema della home. Se un riquadro inizia a leggere un campo nuovo, va
+        // aggiunto alla lista: qui si controlla che ci siano tutti quelli che legge oggi.
+        val url = MediasetUrls.alphabetical("Fiction", page = 1)
+        listOf(
+            "guid",
+            "title",
+            "programType",
+            "thumbnails",
+            "mediasetprogram%24brandId",
+            "mediasetprogram%24brandTitle",
+        ).forEach { field ->
+            assertTrue("manca il campo $field in $url", url.contains(field))
+        }
+        assertTrue(url.contains("fields="))
     }
 
     @Test
@@ -46,7 +99,7 @@ class MediasetUrlsTest {
     fun `la query alfabetica ordina per titolo del marchio`() {
         val url = MediasetUrls.alphabetical("Fiction", page = 2)
         assertTrue(url.contains("sort=mediasetprogram%24brandTitle%7Casc"))
-        assertTrue(url.contains("range=41-80"))
+        assertTrue(url.contains("range=201-400"))
     }
 
     @Test
@@ -67,6 +120,38 @@ class MediasetUrlsTest {
         assertTrue(url.contains("formats=mpeg-dash"))
         assertTrue(url.contains("assetTypes=HR%2Cwidevine%2CgeoIT%7CgeoNo"))
         assertTrue(url.contains("auth=abc.def"))
+    }
+
+    @Test
+    fun `un indirizzo che arriva con una query non prende un secondo punto di domanda`() {
+        // `mediaUrl` arriva da `playbackCheck` e da `nowNext`, cioè da fuori: incollare un
+        // `?` fisso darebbe `...?x=1?format=SMIL` e theplatform lo rifiuterebbe.
+        val url = MediasetUrls.smil(
+            mediaUrl = "https://link.api.eu.theplatform.com/s/PR1GhC/media/UXvEsmsZ1AvC?x=1",
+            assetTypes = "HR,widevine,geoIT|geoNo",
+            token = "abc.def"
+        )
+        assertEquals(1, url.count { it == '?' })
+        assertTrue(url.contains("?x=1&format=SMIL"))
+    }
+
+    @Test
+    fun `il SMIL di una diretta non porta il token`() {
+        // Il flusso in chiaro è già autorizzato dal token che `nowNext` ha messo
+        // nell'indirizzo: un `auth` in più non serve, e `assetTypes` nemmeno.
+        val url = MediasetUrls.liveSmil("https://link.api.eu.theplatform.com/s/PR1GhC/c5-clr")
+        assertEquals(
+            "https://link.api.eu.theplatform.com/s/PR1GhC/c5-clr" +
+                "?format=SMIL&formats=mpeg-dash&tracking=false",
+            url
+        )
+    }
+
+    @Test
+    fun `il SMIL di una diretta rispetta una query gia presente`() {
+        val url = MediasetUrls.liveSmil("https://cdn/c5-clr?hdnts=st%3D1")
+        assertEquals(1, url.count { it == '?' })
+        assertTrue(url.contains("hdnts=st%3D1&format=SMIL"))
     }
 
     @Test

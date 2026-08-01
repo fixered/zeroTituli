@@ -6,18 +6,22 @@ import org.junit.Test
 
 class MediasetSeasonsTest {
 
+    /**
+     * `programType` e non `editorialType`: la classificazione degli extra guarda il primo,
+     * e mettere il secondo nei campioni faceva credere il contrario a chi leggeva il test.
+     */
     private fun ep(
         guid: String,
         season: Int? = null,
         number: Int? = null,
-        type: String = "Full Episode",
+        type: String = "episode",
         subBrand: String? = null,
     ) = FeedEntry(
         guid = guid,
         title = "Ep $guid",
+        programType = type,
         tvSeasonNumber = season,
         tvSeasonEpisodeNumber = number,
-        editorialType = type,
         subBrandId = subBrand,
     )
 
@@ -52,13 +56,100 @@ class MediasetSeasonsTest {
     fun `gli extra senza stagione finiscono in fondo`() {
         val out = MediasetSeasons.arrange(
             listOf(
-                ep("extra", type = "Extra"),
+                ep("extra", type = "extra"),
                 ep("s1e1", season = 1, number = 1),
             )
         )
         assertEquals("s1e1", out.first().entry.guid)
         assertEquals("extra", out.last().entry.guid)
         assertEquals(MediasetSeasons.EXTRAS_SEASON, out.last().season)
+    }
+
+    @Test
+    fun `un extra con la stagione scritta finisce comunque fra gli extra`() {
+        // Nel feed vero gli extra di "La promessa" portano `tvSeasonNumber = 1` come le
+        // puntate, e nessun numero d'episodio. Fidandosi di quel numero finivano in mezzo
+        // alla prima stagione, senza posizione, che è esattamente il buco che la stagione
+        // dedicata deve evitare. Conta il `programType`, non la stagione dichiarata.
+        val out = MediasetSeasons.arrange(
+            listOf(
+                ep("promo", season = 1, type = "extra"),
+                ep("s1e1", season = 1, number = 1),
+                ep("s1e2", season = 1, number = 2),
+            )
+        )
+        assertEquals(listOf("s1e1", "s1e2", "promo"), out.map { it.entry.guid })
+        assertEquals(listOf(1, 1, MediasetSeasons.EXTRAS_SEASON), out.map { it.season })
+    }
+
+    @Test
+    fun `un film resta nella sua stagione senza diventare un extra`() {
+        val out = MediasetSeasons.arrange(listOf(ep("film", season = 1, number = 1, type = "movie")))
+        assertEquals(1, out.single().season)
+    }
+
+    // ============= LA VOCE CHE DA I DATI ALLA SCHEDA =============
+
+    @Test
+    fun `la scheda prende i dati da una puntata intera, non dal promo che apre il feed`() {
+        // L'ordine è quello che il feed vero restituisce per "La promessa": le prime due
+        // voci sono un promo e una clip sul cast. Prendendo la prima, la scheda della serie
+        // si presentava col titolo e la grafica di un trailer.
+        val head = MediasetSeasons.head(
+            listOf(
+                ep("promo", season = 1, type = "extra"),
+                ep("clip-cast", season = 1, type = "extra"),
+                ep("s1e1", season = 1, number = 1),
+            )
+        )
+        assertEquals("s1e1", head?.guid)
+    }
+
+    @Test
+    fun `senza puntate la scheda prende i dati dal film`() {
+        val head = MediasetSeasons.head(
+            listOf(
+                ep("trailer", type = "extra"),
+                ep("film", number = 1, type = "movie"),
+            )
+        )
+        assertEquals("film", head?.guid)
+    }
+
+    @Test
+    fun `un marchio di soli extra da comunque una scheda`() {
+        // Meglio una scheda coi dati di un extra che nessuna scheda: `load` tornerebbe
+        // null e CloudStream mostrerebbe un errore di caricamento.
+        val head = MediasetSeasons.head(listOf(ep("solo-extra", type = "extra")))
+        assertEquals("solo-extra", head?.guid)
+    }
+
+    @Test
+    fun `senza voci non c e nessuna testa`() {
+        assertEquals(null, MediasetSeasons.head(emptyList()))
+    }
+
+    @Test
+    fun `i promo non contano per decidere se un marchio e un film`() {
+        // È la regola che decide fra scheda film e serie da una puntata: un film con due
+        // promo attaccati ha tre voci, ma una sola guardabile.
+        val entries = listOf(
+            ep("trailer", type = "extra"),
+            ep("film", number = 1, type = "movie"),
+            ep("backstage", type = "extra"),
+        )
+        val playable = MediasetSeasons.playable(entries)
+        assertEquals(listOf("film"), playable.map { it.guid })
+    }
+
+    @Test
+    fun `una serie da due puntate non e un film`() {
+        val entries = listOf(
+            ep("s1e1", season = 1, number = 1),
+            ep("s1e2", season = 1, number = 2),
+            ep("extra", type = "extra"),
+        )
+        assertEquals(2, MediasetSeasons.playable(entries).size)
     }
 
     @Test

@@ -1,0 +1,14 @@
+<smil xmlns="http://www.w3.org/2005/SMIL21/Language">
+	<head>
+	</head>
+	<body>
+	<seq>
+		<!--
+			Il blocco geografico vero, come lo descrive il progetto: il CDN risponde con
+			esito positivo e un video di cortesia, senza dichiarare nessuna eccezione. È
+			l'unico caso in cui l'indirizzo è la sola cosa da cui accorgersene.
+		-->
+		<video src="https://vod06-mediaset-it.akamaized.net/cortesia/GEOLOCK-DEF_2.mp4" title="Stream" type="video/mp4"></video>
+	</seq>
+	</body>
+</smil>

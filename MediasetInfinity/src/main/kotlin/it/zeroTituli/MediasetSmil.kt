@@ -8,8 +8,15 @@ sealed class SmilResult {
     /** `assetTypes` o `formats` non combaciano con nessuna copia disponibile. */
     object NoMatch : SmilResult()
 
-    /** Fuori area, o token non valido: il CDN manda un video di cortesia. */
+    /** Fuori area: il CDN manda un video di cortesia. Vale per tutte le copie. */
     object GeoBlocked : SmilResult()
+
+    /**
+     * Il token è scaduto o non è valido. Diverso da `GeoBlocked` anche se il CDN manda lo
+     * stesso cartello, perché questo si risolve rifacendo il login: confonderli teneva
+     * l'utente fermo per le quattro ore di vita della sessione, senza un messaggio.
+     */
+    object TokenExpired : SmilResult()
 
     data class Failed(val reason: String) : SmilResult()
 }
@@ -34,15 +41,24 @@ object MediasetSmil {
         val url = src.find(payload)?.groupValues?.get(1)
             ?: return SmilResult.Failed("nessun flusso nel SMIL")
 
-        // Il cartello di cortesia arriva con esito positivo: si riconosce dall'indirizzo.
-        if (url.contains("/cortesia/") || url.contains("GEOLOCK")) return SmilResult.GeoBlocked
-
+        // L'eccezione dichiarata viene prima dell'indirizzo, e l'ordine è il punto.
+        // theplatform manda lo stesso `cortesia/GEOLOCK-DEF_2.mp4` sia fuori area sia con
+        // il token scaduto — nel secondo caso col titolo "Invalid Token" e
+        // `exception="InvalidAuthToken"` — quindi l'indirizzo da solo non distingue i due
+        // casi. Leggendolo per primo il ramo del token non veniva mai raggiunto: ogni
+        // token scaduto passava per un blocco geografico, cioè per un errore definitivo,
+        // e il nuovo login che il progetto promette non partiva mai.
         when (exception.find(payload)?.groupValues?.get(1)) {
             null -> Unit
             "NoAssetTypeFormatMatches" -> return SmilResult.NoMatch
-            "InvalidAuthToken", "GeoLocationBlocked" -> return SmilResult.GeoBlocked
+            "InvalidAuthToken", "InvalidToken", "TokenExpired" -> return SmilResult.TokenExpired
+            "GeoLocationBlocked" -> return SmilResult.GeoBlocked
             else -> return SmilResult.NoMatch
         }
+
+        // Senza eccezione dichiarata resta l'indirizzo: il cartello arriva con esito
+        // positivo, e senza riconoscerlo si guarda il cartello al posto del film.
+        if (url.contains("/cortesia/") || url.contains("GEOLOCK")) return SmilResult.GeoBlocked
 
         if (url.contains("errorFiles")) return SmilResult.NoMatch
 

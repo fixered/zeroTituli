@@ -12,7 +12,13 @@ object MediasetImages {
     private val VERTICAL = listOf("image_vertical", "brand_cover", "image_header_poster")
     private val WIDE = listOf("image_header_poster", "img_s_master_16_9", "brand_cover", "image_horizontal_cover")
     private val STILL = listOf("image_keyframe_poster", "image_horizontal_cover", "img_s_master_16_9")
-    private val LOGO = listOf("logo_horizontal", "brand_logo")
+    /**
+     * Il logo di un canale. La stazione di `nowNext` lo porta sotto `channel_logo`; le
+     * altre famiglie sono quelle delle voci di programma, tenute come riserva se Mediaset
+     * cambia il payload della stazione. La lista stava scritta due volte, qui e dentro
+     * `MediasetLive`, e solo una delle due conosceva `channel_logo`.
+     */
+    private val LOGO = listOf("channel_logo", "logo_horizontal", "brand_logo", "image_vertical")
 
     fun poster(entry: FeedEntry): String? = best(entry.thumbnails, VERTICAL)
 
@@ -20,7 +26,8 @@ object MediasetImages {
 
     fun still(entry: FeedEntry): String? = best(entry.thumbnails, STILL)
 
-    fun brandLogo(entry: FeedEntry): String? = best(entry.thumbnails, LOGO)
+    /** Il logo prende le miniature così come arrivano: la stazione non è una `FeedEntry`. */
+    fun channelLogo(thumbnails: Map<String, Thumbnail>): String? = best(thumbnails, LOGO)
 
     /**
      * Il primo gruppo che ha almeno un'immagine vince, e dentro il gruppo vince la

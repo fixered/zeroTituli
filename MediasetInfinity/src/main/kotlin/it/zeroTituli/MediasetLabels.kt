@@ -15,6 +15,14 @@ object MediasetLabels {
     fun tags(entry: FeedEntry): List<String> =
         if (entry.isFree) entry.genres else listOf("Abbonamento") + entry.genres
 
+    /**
+     * Il nome della stagione nel selettore di CloudStream. Serve perché la stagione degli
+     * extra è il numero 999, scelto per farla restare in fondo, e senza un nome il
+     * selettore la annuncia come "Season 999".
+     */
+    fun seasonName(season: Int): String =
+        if (season == MediasetSeasons.EXTRAS_SEASON) "Extra e speciali" else "Stagione $season"
+
     /** Alla trama si aggiunge l'avviso quando il contenuto non è gratuito. */
     fun description(entry: FeedEntry): String? {
         val plot = entry.plot

@@ -60,4 +60,17 @@ class MediasetLabelsTest {
         val out = entry(free = true, genres = emptyList())
         assertTrue(MediasetLabels.tags(out).isEmpty())
     }
+
+    @Test
+    fun `la stagione degli extra ha un nome, non il suo numero`() {
+        // 999 è scelto per tenere gli extra in fondo al selettore, non per essere letto:
+        // senza un nome CloudStream annuncerebbe "Season 999".
+        assertEquals("Extra e speciali", MediasetLabels.seasonName(MediasetSeasons.EXTRAS_SEASON))
+    }
+
+    @Test
+    fun `le stagioni vere si chiamano col loro numero`() {
+        assertEquals("Stagione 1", MediasetLabels.seasonName(1))
+        assertEquals("Stagione 12", MediasetLabels.seasonName(12))
+    }
 }

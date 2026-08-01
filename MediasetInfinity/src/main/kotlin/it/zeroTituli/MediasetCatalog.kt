@@ -27,7 +27,7 @@ class MediasetCatalog(
             if (info.mediaUrl == null) return@mapNotNull null
             newLiveSearchResponse(
                 name = info.nowPlaying?.let { "${info.title} · $it" } ?: info.title,
-                url = "live:${channel.callSign}",
+                url = MediasetKeys.live(channel.callSign),
                 type = TvType.Live,
                 fix = false,
             ) {
@@ -38,21 +38,42 @@ class MediasetCatalog(
     }
 
     /** Le righe di una sezione, lette dal sito; vuote se il markup è cambiato. */
-    suspend fun MainAPI.sectionRows(slug: String, label: String): List<HomePageList> {
+    suspend fun MainAPI.sectionRows(section: MediasetSection): List<HomePageList> {
         val html = runCatching {
-            com.lagradost.cloudstream3.app.get(MediasetUrls.section(slug)).body.string()
+            com.lagradost.cloudstream3.app.get(MediasetUrls.section(section.slug)).body.string()
         }.getOrNull().orEmpty()
 
         val rows = MediasetSections.read(html).mapNotNull { row ->
             val items = row.items.mapNotNull { toSearchResponse(it) }
-            if (items.isEmpty()) null else HomePageList("$label · ${row.title}", items)
+            if (items.isEmpty()) null else HomePageList("${section.label} · ${row.title}", items)
         }
         if (rows.isNotEmpty()) return rows
 
         // Ripiego: la sezione resta, cambia l'ordine.
-        val entries = api.entries(MediasetUrls.byCategory(categoryOf(slug), page = 1))
+        val entries = api.entries(MediasetUrls.byCategory(section.feedCategory, page = 1))
         val items = brandCards(entries)
-        return if (items.isEmpty()) emptyList() else listOf(HomePageList(label, items))
+        return if (items.isEmpty()) emptyList() else listOf(HomePageList(section.label, items))
+    }
+
+    /**
+     * I consigliati di una scheda.
+     *
+     * Il progetto li chiama "consigliati dallo stesso marchio", ma alla lettera non
+     * esistono: le voci di un marchio **sono** l'elenco degli episodi della scheda, e
+     * ripeterle sotto non consiglia niente. L'unico legame che il feed offre fra marchi
+     * diversi è la categoria, quindi si consigliano gli altri programmi della stessa
+     * categoria, escluso quello aperto.
+     */
+    suspend fun MainAPI.recommendations(
+        category: String,
+        excludeBrandId: String?,
+    ): List<SearchResponse> {
+        val entries = api.entries(
+            // Meno voci della riga di catalogo: qui bastano venti riquadri, e la richiesta
+            // si aggiunge all'apertura di ogni scheda, quindi va tenuta leggera.
+            MediasetUrls.byCategory(category, page = 1, perPage = RECOMMENDATIONS_PER_PAGE)
+        ).filter { it.brandId != excludeBrandId }
+        return brandCards(entries).take(RECOMMENDATIONS)
     }
 
     suspend fun MainAPI.genreRow(genre: String, page: Int): HomePageList? {
@@ -84,11 +105,16 @@ class MediasetCatalog(
         // `https://mediasetinfinity.mediaset.it/brand:123` e `load` non lo
         // riconoscerebbe più. Vale per tutte e tre le `new*SearchResponse`.
         return if (entry.programType == "movie") {
-            newMovieSearchResponse(name, "brand:$brandId", TvType.Movie, fix = false) {
+            newMovieSearchResponse(name, MediasetKeys.brand(brandId), TvType.Movie, fix = false) {
                 this.posterUrl = poster
             }
         } else {
-            newTvSeriesSearchResponse(name, "brand:$brandId", TvType.TvSeries, fix = false) {
+            newTvSeriesSearchResponse(
+                name,
+                MediasetKeys.brand(brandId),
+                TvType.TvSeries,
+                fix = false
+            ) {
                 this.posterUrl = poster
             }
         }
@@ -100,19 +126,24 @@ class MediasetCatalog(
      */
     private fun MainAPI.toSearchResponse(item: SectionItem): SearchResponse? {
         val guid = item.seriesGuid ?: return null
-        return newTvSeriesSearchResponse(item.title, "series:$guid", TvType.TvSeries, fix = false) {
+        return newTvSeriesSearchResponse(
+            item.title,
+            MediasetKeys.series(guid),
+            TvType.TvSeries,
+            fix = false
+        ) {
             this.posterUrl = item.poster
         }
     }
 
-    /** Le sezioni del sito e le categorie del catalogo non hanno gli stessi nomi. */
-    private fun categoryOf(slug: String): String = when (slug) {
-        "fiction" -> "Fiction"
-        "cinema" -> "Cinema"
-        "programmitv" -> "Programmi Tv"
-        "kids" -> "Kids"
-        "documentari" -> "Documentari"
-        "news-e-sport" -> "Calcio e Sport"
-        else -> "Fiction"
+    private companion object {
+        /** Una riga di consigliati, non un secondo catalogo. */
+        const val RECOMMENDATIONS = 20
+
+        /**
+         * Cento voci di feed danno circa ventidue programmi distinti nella Fiction, misurato
+         * sul feed vero: abbastanza per riempire i venti riquadri quasi sempre.
+         */
+        const val RECOMMENDATIONS_PER_PAGE = 100
     }
 }

@@ -61,7 +61,19 @@ class MediasetImagesTest {
             thumb("logo_horizontal-320x128", 320, 128),
             thumb("brand_logo-210x210", 210, 210),
         )
-        assertEquals("https://img/logo_horizontal-320x128.jpg", MediasetImages.brandLogo(e))
+        assertEquals("https://img/logo_horizontal-320x128.jpg", MediasetImages.channelLogo(e.thumbnails))
+    }
+
+    @Test
+    fun `la stazione porta il logo sotto channel_logo, e quello vince`() {
+        // La lista dei gruppi stava scritta due volte, qui e dentro `MediasetLive`, e solo
+        // quella di `MediasetLive` conosceva `channel_logo`, che è la famiglia con cui
+        // `nowNext` manda davvero il logo. Ora c'è una lista sola e comincia da lì.
+        val thumbnails = mapOf(
+            thumb("logo_horizontal-320x128", 320, 128),
+            thumb("channel_logo-210x210", 210, 210),
+        )
+        assertEquals("https://img/channel_logo-210x210.jpg", MediasetImages.channelLogo(thumbnails))
     }
 
     @Test

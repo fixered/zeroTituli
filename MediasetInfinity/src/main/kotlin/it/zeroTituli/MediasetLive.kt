@@ -66,13 +66,7 @@ object MediasetLive {
         return LiveInfo(
             title = station?.title?.takeIf { it.isNotBlank() } ?: fallbackLabel,
             nowPlaying = body.currentListing?.title?.takeIf { it.isNotBlank() },
-            // La stazione porta il logo sotto `channel_logo`: le altre famiglie sono
-            // quelle delle voci di programma, tenute come riserva se Mediaset cambia
-            // il payload della stazione, non da "ripulire".
-            logo = MediasetImages.best(
-                station?.thumbnails.orEmpty(),
-                listOf("channel_logo", "logo_horizontal", "brand_logo", "image_vertical")
-            ),
+            logo = MediasetImages.channelLogo(station?.thumbnails.orEmpty()),
             mediaUrl = clearMediaUrl(payload),
         )
     }
@@ -85,17 +79,46 @@ object MediasetLive {
  * La parte che parla in rete: una chiamata per canale, e il SMIL della diretta che
  * non ha bisogno del token perché il flusso in chiaro è già autorizzato.
  */
-class MediasetLiveApi(private val api: MediasetApi) {
+class MediasetLiveApi(
+    private val clock: () -> Long = { System.currentTimeMillis() },
+) {
 
-    suspend fun info(callSign: String, label: String): LiveInfo? = runCatching {
-        val payload = com.lagradost.cloudstream3.app.get(MediasetUrls.nowNext(callSign)).body.string()
-        MediasetLive.info(payload, label)
-    }.getOrNull()
+    /**
+     * `nowNext` veniva chiamato tre volte per ogni canale che si guarda: una per la riga
+     * della home, una per la scheda, una per il flusso. Il programma in onda cambia ogni
+     * mezz'ora, quindi mezzo minuto di memoria non invecchia niente di visibile e taglia
+     * due chiamate su tre.
+     */
+    private val cache = mutableMapOf<String, Pair<Long, String>>()
+
+    private suspend fun payload(callSign: String): String? {
+        synchronized(cache) {
+            cache[callSign]?.let { (bornAt, payload) ->
+                if (clock() - bornAt in 0 until CACHE_MS) return payload
+            }
+        }
+        val fresh = runCatching {
+            com.lagradost.cloudstream3.app.get(MediasetUrls.nowNext(callSign)).body.string()
+        }.getOrNull() ?: return null
+        synchronized(cache) { cache[callSign] = clock() to fresh }
+        return fresh
+    }
+
+    suspend fun info(callSign: String, label: String): LiveInfo? =
+        payload(callSign)?.let { MediasetLive.info(it, label) }
 
     /** Dall'indirizzo theplatform al manifest vero. */
     suspend fun manifest(mediaUrl: String): String? = runCatching {
-        val url = "$mediaUrl?format=SMIL&formats=mpeg-dash&tracking=false"
-        val payload = com.lagradost.cloudstream3.app.get(url).body.string()
-        (MediasetSmil.read(payload) as? SmilResult.Stream)?.url
+        val payload =
+            com.lagradost.cloudstream3.app.get(MediasetUrls.liveSmil(mediaUrl)).body.string()
+        // Il chiamante dichiara `ExtractorLinkType.DASH`: un `.m3u8` o un `.mp4` finito
+        // qui per sbaglio partirebbe con il tipo sbagliato invece di non partire.
+        (MediasetSmil.read(payload) as? SmilResult.Stream)
+            ?.takeIf { it.kind == StreamKind.DASH }
+            ?.url
     }.getOrNull()
+
+    private companion object {
+        const val CACHE_MS = 30_000L
+    }
 }

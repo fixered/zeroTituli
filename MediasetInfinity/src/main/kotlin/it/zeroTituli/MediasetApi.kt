@@ -31,9 +31,24 @@ object MediasetSession {
 
 data class VodStream(val manifest: String, val licenseUrl: String)
 
+/**
+ * Perché un contenuto non parte. Ogni ramo è un messaggio diverso per l'utente: un
+ * `false` secco lo lasciava davanti allo stesso errore generico sia fuori area, sia con
+ * la sessione scaduta, sia davanti a un contenuto da abbonamento.
+ */
 sealed class VodResult {
     data class Ok(val stream: VodStream) : VodResult()
+
+    /** Fuori area. Non si risolve riprovando. */
     object GeoBlocked : VodResult()
+
+    /** Sessione caduta, e caduta di nuovo dopo il nuovo login. */
+    object TokenExpired : VodResult()
+
+    /** `playbackCheck` risponde ma senza `mediaSelector`: abbonamento o noleggio. */
+    object SubscriptionRequired : VodResult()
+
+    /** Nessuna copia utile, o la rete non ha risposto. */
     object NotAvailable : VodResult()
 }
 
@@ -109,18 +124,24 @@ class MediasetApi(private val clock: () -> Long = { System.currentTimeMillis() }
      */
     suspend fun vod(guid: String): VodResult {
         val first = resolve(guid)
-        if (first != VodResult.NotAvailable) return first
 
-        // Il token può essere scaduto prima del tempo previsto: si butta la sessione e
-        // si riprova **una volta sola**. Se cade di nuovo, il contenuto non è
-        // disponibile per davvero e insistere farebbe solo girare a vuoto.
+        // Si riprova **una volta sola**, e solo per i due esiti che un login nuovo può
+        // ancora salvare: la sessione caduta prima del tempo previsto e il buco muto in
+        // cui non si è capito niente. Su tutti gli altri — fuori area, abbonamento —
+        // riprovare gira a vuoto, e ciclare è quello che il progetto vieta.
+        if (first != VodResult.NotAvailable && first != VodResult.TokenExpired) return first
+
         session = null
         return resolve(guid)
     }
 
     private suspend fun resolve(guid: String): VodResult {
         val session = session() ?: return VodResult.NotAvailable
-        val mediaUrl = mediaSelectorUrl(guid, session) ?: return VodResult.NotAvailable
+        val mediaUrl = when (val selector = mediaSelector(guid, session)) {
+            is Selector.Url -> selector.url
+            Selector.Locked -> return VodResult.SubscriptionRequired
+            Selector.Unknown -> return VodResult.NotAvailable
+        }
 
         VOD_ASSET_TYPES.forEach { assetTypes ->
             val payload = runCatching {
@@ -130,7 +151,10 @@ class MediasetApi(private val clock: () -> Long = { System.currentTimeMillis() }
             when (val result = MediasetSmil.read(payload)) {
                 is SmilResult.Stream -> {
                     if (result.kind != StreamKind.DASH) return@forEach
-                    val pid = mediaUrl.substringAfterLast('/')
+                    // La barra finale, se c'è, va tolta prima: `substringAfterLast` su un
+                    // indirizzo che finisce con `/` restituisce la stringa vuota, e la
+                    // licenza partirebbe senza `releasePid`.
+                    val pid = mediaUrl.trimEnd('/').substringAfterLast('/')
                     return VodResult.Ok(
                         VodStream(
                             manifest = result.url,
@@ -140,6 +164,9 @@ class MediasetApi(private val clock: () -> Long = { System.currentTimeMillis() }
                 }
                 // Fuori area vale per tutte le copie: insistere non cambia niente.
                 SmilResult.GeoBlocked -> return VodResult.GeoBlocked
+                // Nemmeno il token cambia da una copia all'altra: serve un login nuovo,
+                // e quello lo decide `vod`.
+                SmilResult.TokenExpired -> return VodResult.TokenExpired
                 SmilResult.NoMatch -> Unit
                 is SmilResult.Failed -> Unit
             }
@@ -147,12 +174,34 @@ class MediasetApi(private val clock: () -> Long = { System.currentTimeMillis() }
         return VodResult.NotAvailable
     }
 
+    /**
+     * Cosa ha detto `playbackCheck`. Tre esiti e non un `String?`, perché "ha risposto
+     * che serve un abbonamento" e "non ha risposto" sono due messaggi diversi per chi
+     * guarda, e appiattirli su `null` li rendeva lo stesso errore.
+     */
+    private sealed class Selector {
+        data class Url(val url: String) : Selector()
+        object Locked : Selector()
+        object Unknown : Selector()
+    }
+
     /** `playbackCheck` dice se il contenuto è riproducibile e dove sta la sua copia. */
-    private suspend fun mediaSelectorUrl(guid: String, session: Session): String? = runCatching {
+    private suspend fun mediaSelector(guid: String, session: Session): Selector {
+        val body = runCatching {
+            val payload = playbackCheck(guid, session)
+            MediasetJson.parse<PlaybackCheckResponse>(payload)?.response
+        }.getOrNull() ?: return Selector.Unknown
+
+        // Senza `mediaSelector` il contenuto vuole un abbonamento o un noleggio.
+        val url = body.mediaSelector?.url?.takeIf { it.isNotBlank() } ?: return Selector.Locked
+        return Selector.Url(url)
+    }
+
+    private suspend fun playbackCheck(guid: String, session: Session): String {
         val body = MediasetJson.mapper.writeValueAsString(
             mapOf("contentId" to guid, "streamType" to "VOD")
         )
-        val response = app.post(
+        return app.post(
             MediasetUrls.playbackCheck,
             headers = mapOf(
                 "Content-Type" to "application/json",
@@ -162,9 +211,5 @@ class MediasetApi(private val clock: () -> Long = { System.currentTimeMillis() }
             ),
             requestBody = body.toRequestBody(JSON)
         ).body.string()
-
-        // Senza `mediaSelector` il contenuto vuole un abbonamento o un noleggio.
-        MediasetJson.parse<PlaybackCheckResponse>(response)
-            ?.response?.mediaSelector?.url?.takeIf { it.isNotBlank() }
-    }.getOrNull()
+    }
 }
