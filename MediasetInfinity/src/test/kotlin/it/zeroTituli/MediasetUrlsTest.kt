@@ -95,12 +95,61 @@ class MediasetUrlsTest {
                 "thumbnails",
                 "mediasetprogram%24brandId",
                 "mediasetprogram%24brandTitle",
+                // Il diritto AVOD: `MediasetRanking.ordered` manda in coda i riquadri a
+                // pagamento leggendo `FeedEntry.isFree`, che senza questo campo torna
+                // `false` per ogni voce.
+                "mediasetprogram%24channelsRights",
             ),
             fieldsOf(url)
         )
         // La stessa proiezione, identica, sulle altre due righe di catalogo.
         assertEquals(fieldsOf(url), fieldsOf(MediasetUrls.byGenre("Commedia", page = 1)))
         assertEquals(fieldsOf(url), fieldsOf(MediasetUrls.byCategory("Fiction", page = 1)))
+    }
+
+    @Test
+    fun `le righe di catalogo chiedono i diritti su cui si ordina`() {
+        // Test a sé, e non una riga in più in quello sopra, perché è la regressione
+        // vera: la proiezione delle righe non portava `channelsRights`, quindi
+        // `FeedEntry.isFree` era `false` per ogni voce di catalogo e la regola
+        // gratis-prima non avrebbe ordinato niente — senza che nulla si rompesse. Il
+        // controllo è sul valore di `fields=` spezzato per campo e non su
+        // `url.contains(...)`: `mediasetprogram%24channelsRights` non compare altrove in
+        // questo indirizzo oggi, ma `brandTitle` insegnava che una sottostringa può
+        // arrivare dal `sort=` e far passare un test che non prova niente.
+        listOf(
+            MediasetUrls.byCategory("Cinema", page = 1),
+            MediasetUrls.byGenre("Commedia", page = 1),
+            MediasetUrls.alphabetical("Fiction", page = 1),
+        ).forEach { url ->
+            assertTrue(
+                "senza mediasetprogram\$channelsRights isFree è sempre falso, e " +
+                    "l'ordinamento gratis-prima non ordina niente: $url",
+                fieldsOf(url).contains("mediasetprogram%24channelsRights")
+            )
+        }
+    }
+
+    @Test
+    fun `la ricerca e la voce singola arrivano intere`() {
+        // `MediasetRanking` legge il nome del programma e i diritti anche sui risultati
+        // della ricerca: queste due query non hanno `fields=`, quindi la voce arriva
+        // intera e i campi ci sono. Il giorno che qualcuno aggiunge una proiezione qui
+        // per risparmiare, questo test dice cosa deve restarci dentro.
+        listOf(
+            MediasetUrls.search("la promessa", page = 1),
+            MediasetUrls.byGuid("F310731301000101"),
+        ).forEach { url ->
+            val fields = fieldsOf(url)
+            assertTrue(
+                "con una proiezione qui servono almeno brandTitle e channelsRights: $url",
+                fields.isEmpty() ||
+                    (
+                        fields.contains("mediasetprogram%24brandTitle") &&
+                            fields.contains("mediasetprogram%24channelsRights")
+                        )
+            )
+        }
     }
 
     @Test

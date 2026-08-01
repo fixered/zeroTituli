@@ -118,6 +118,24 @@ class MediasetLiveApi(
             ?.url
     }.getOrNull()
 
+    /**
+     * Il manifest scaricato dal CDN e riscritto per essere servito dal proxy.
+     *
+     * Ricalcolato a ogni richiesta perché la diretta è un `MPD` dinamico
+     * (`minimumUpdatePeriod="PT4S"`): il lettore torna a chiederlo di continuo, e ogni volta
+     * deve trovare la finestra di segmenti aggiornata. Il permesso dentro l'indirizzo dura
+     * invece ore, quindi lo stesso `manifestUrl` regge per tutta la visione.
+     *
+     * Il controllo su `<MPD` non è cerimonia: fuori area e token scaduto arrivano con esito
+     * positivo e un corpo che non è un manifest, e senza guardarlo il proxy servirebbe quel
+     * corpo come `application/dash+xml` lasciando il lettore su un errore muto.
+     */
+    suspend fun rewrittenManifest(manifestUrl: String): String? = runCatching {
+        val body = com.lagradost.cloudstream3.app.get(manifestUrl).body.string()
+        if (!body.contains("<MPD", ignoreCase = true)) return@runCatching null
+        MediasetMpd.rewrite(body, manifestUrl)
+    }.getOrNull()
+
     private companion object {
         const val CACHE_MS = 30_000L
     }

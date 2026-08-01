@@ -38,13 +38,23 @@ object LocalProxy {
         suspend fun body(params: Map<String, String>): String?
     }
 
-    private const val MIME_HLS = "application/vnd.apple.mpegurl"
+    const val MIME_HLS = "application/vnd.apple.mpegurl"
+
+    /**
+     * Un manifest DASH servito come HLS non parte: ExoPlayer sceglie l'estrattore dal tipo
+     * dichiarato, e l'indirizzo del proxy non ha estensione da cui indovinare.
+     */
+    const val MIME_DASH = "application/dash+xml"
+
     private const val PATH_DYNAMIC = "/d"   // playlist prodotta dal plugin
     private const val PATH_HLS = "/m"       // playlist remota inoltrata e riscritta
     private const val PATH_RAW = "/r"       // segmento o chiave inoltrati così come sono
 
     @Volatile private var port = 0
     @Volatile private var source: PlaylistSource? = null
+
+    /** Sta accanto a [source] e si scrive insieme a lui: il corpo e il suo tipo sono una cosa sola. */
+    @Volatile private var sourceMime: String = MIME_HLS
 
     private val headerSets = ConcurrentHashMap<String, Map<String, String>>()
     private val pool = Executors.newCachedThreadPool { r ->
@@ -53,9 +63,19 @@ object LocalProxy {
 
     // ============= INDIRIZZI =============
 
-    /** @param forCast true quando l'indirizzo deve essere raggiungibile dal Chromecast. */
-    fun playlist(source: PlaylistSource, params: Map<String, String>, forCast: Boolean): String {
+    /**
+     * @param forCast true quando l'indirizzo deve essere raggiungibile dal Chromecast.
+     * @param mime il tipo con cui servire il corpo. Predefinito HLS, che è quello che i tre
+     *   plugin storici producono; le dirette Mediaset passano di qui con un manifest DASH.
+     */
+    fun playlist(
+        source: PlaylistSource,
+        params: Map<String, String>,
+        forCast: Boolean,
+        mime: String = MIME_HLS,
+    ): String {
         this.source = source
+        this.sourceMime = mime
         return base(forCast) + PATH_DYNAMIC + "?" + query(params)
     }
 
@@ -158,7 +178,7 @@ object LocalProxy {
     private fun serveDynamic(out: OutputStream, params: Map<String, String>) {
         val body = runBlocking { source?.body(params) }
         if (body == null) writeText(out, 502, "text/plain", "no playlist")
-        else writeText(out, 200, MIME_HLS, body)
+        else writeText(out, 200, sourceMime, body)
     }
 
     private fun serveHls(out: OutputStream, params: Map<String, String>) {

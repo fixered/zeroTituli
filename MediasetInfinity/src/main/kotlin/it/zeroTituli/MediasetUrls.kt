@@ -61,10 +61,19 @@ object MediasetUrls {
 
     /**
      * I soli campi che un riquadro di catalogo legge (vedi `MediasetCatalog.brandCards`):
-     * marchio, titolo, tipo e immagini. Chiedendo solo questi la risposta da 200 voci
-     * scende da 2,3 MB a 1,5 MB, che è il prezzo di alzare le voci per pagina senza
+     * marchio, titolo, tipo, immagini e diritti. Chiedendo solo questi la risposta da 200
+     * voci scende da 2,8 MB a 1,9 MB, che è il prezzo di alzare le voci per pagina senza
      * peggiorare la memoria. Se un riquadro inizia a leggere un campo nuovo va aggiunto
      * qui, altrimenti arriva vuoto e non se ne accorge nessuno.
+     *
+     * `mediasetprogram$channelsRights` è esattamente quel caso, ed è costato una
+     * segnalazione: `MediasetRanking` manda in coda i contenuti a pagamento leggendo
+     * `FeedEntry.isFree`, che senza questo campo torna `false` per **ogni** voce — cioè
+     * l'ordinamento non ordinerebbe niente, in silenzio, e la categoria Cinema
+     * continuerebbe ad aprirsi su una fila di schede che non partono. Misura vera sul
+     * feed, `byCategory("Cinema")` da 200 voci: 1 900 025 byte senza il campo,
+     * 1 920 531 con, cioè **+20 kB, l'1,1% in più**. Su `minSdk 21` è il prezzo giusto
+     * per una riga che si può guardare.
      */
     private val CARD_FIELDS = listOf(
         "guid",
@@ -73,6 +82,7 @@ object MediasetUrls {
         "thumbnails",
         "mediasetprogram\$brandId",
         "mediasetprogram\$brandTitle",
+        "mediasetprogram\$channelsRights",
     ).joinToString(",")
 
     /**
@@ -227,6 +237,13 @@ object MediasetUrls {
         )
     )
 
+    /**
+     * Senza `fields=`, di proposito: la voce arriva intera, quindi porta già
+     * `mediasetprogram$channelsRights` e `mediasetprogram$brandTitle`, che sono i due
+     * campi su cui `MediasetRanking` riordina i risultati. Quaranta voci per pagina, non
+     * duecento come le righe di catalogo: aggiungere una proiezione qui taglierebbe meno
+     * di quanto costa il rischio di dimenticarsi un campo.
+     */
     fun search(query: String, page: Int, perPage: Int = 40) = feed(
         mapOf(
             "q" to query,
@@ -234,6 +251,7 @@ object MediasetUrls {
         )
     )
 
+    /** Una voce sola e intera: nessuna proiezione, quindi nessun campo che manca. */
     fun byGuid(guid: String) = feed(mapOf("byGuid" to guid, "range" to "1-1"))
 
     fun smil(

@@ -24,6 +24,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.WIDEVINE_UUID
 import com.lagradost.cloudstream3.utils.newDrmExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import it.zeroTituli.shared.LocalProxy
 
 /**
  * Mediaset Infinity.
@@ -95,12 +96,20 @@ class MediasetInfinity : MainAPI() {
     // identico a quello che oggi vive in `MediasetCatalog.brandCards`: senza riunirli, la
     // ricerca avrebbe continuato a mostrare cinque risultati per "Temptation Island" anche
     // dopo aver sistemato le righe del catalogo.
+    //
+    // La richiesta va passata anche a valle, e non solo al feed: il `q=` di theplatform
+    // cerca nei metadati delle puntate, quindi cercando "la promessa" il programma
+    // omonimo arrivava **ottavo**, dietro `Arriva Cristina` e `Terra promessa`. È
+    // `MediasetRanking` a rimetterlo in cima, confrontando la richiesta con il nome del
+    // programma; senza questo parametro resterebbe la sola regola gratis-prima.
     override suspend fun search(query: String): List<SearchResponse> = with(catalog) {
-        brandCards(api.entries(MediasetUrls.search(query, page = 1)))
+        brandCards(api.entries(MediasetUrls.search(query, page = 1)), searchQuery = query)
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList = with(catalog) {
-        val items = brandCards(api.entries(MediasetUrls.search(query, page)))
+        // Il riordino è per pagina, perché per pagina è quel che si ha in mano: il feed
+        // pagina prima che il plugin possa vedere il resto.
+        val items = brandCards(api.entries(MediasetUrls.search(query, page)), searchQuery = query)
         newSearchResponseList(items, hasNext = items.isNotEmpty())
     }
 
@@ -315,7 +324,7 @@ class MediasetInfinity : MainAPI() {
         // spogliarlo qui, resterebbero rotti anche dopo la correzione a monte.
         return runCatching {
             when (val key = MediasetKeys.data(MediasetKeys.strip(data, mainUrl))) {
-                is MediasetKeys.Data.Live -> liveLink(key.callSign, callback)
+                is MediasetKeys.Data.Live -> liveLink(key.callSign, isCasting, callback)
                 is MediasetKeys.Data.Vod -> vodLink(key.guid, isCasting, callback)
                 null -> {
                     report(callback, "chiave non riconosciuta '$data'")
@@ -358,10 +367,23 @@ class MediasetInfinity : MainAPI() {
     }
 
     /**
-     * Le dirette sono in chiaro e il permesso è già dentro l'indirizzo: il Chromecast
-     * le apre da solo, senza proxy e senza header da rimettere.
+     * Le dirette sono in chiaro, ma il permesso sta nella query del manifest e **non** dentro
+     * il manifest: i segmenti, che lì sono scritti relativi, partirebbero nudi e il CDN li
+     * rifiuta con `403`. Un browser non se ne accorge perché il manifest gli lascia il cookie
+     * `hdntl`; la sorgente dati di ExoPlayer non tiene cookie e la diretta restava muta.
+     *
+     * Quindi il manifest — pochi kB — passa dal proxy locale, che lo serve riscritto con gli
+     * indirizzi assoluti e il permesso attaccato a ogni segmento (vedi [MediasetMpd]). I
+     * segmenti continuano ad andare diretti al CDN: il flusso vero non attraversa il telefono.
+     *
+     * `forCast = isCasting` come in FCTV33: in locale basta `127.0.0.1`, e l'indirizzo di rete
+     * serve solo quando è il televisore a dover raggiungere il telefono.
      */
-    private suspend fun liveLink(callSign: String, callback: (ExtractorLink) -> Unit): Boolean {
+    private suspend fun liveLink(
+        callSign: String,
+        isCasting: Boolean,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val label = MediasetLive.labelFor(callSign)
         // Questi due `throw` finiscono nel log e **non** sotto gli occhi di chi guarda: il
         // perché sta scritto per esteso su `vodLink`.
@@ -369,11 +391,20 @@ class MediasetInfinity : MainAPI() {
             ?: throw ErrorLoadingException("Diretta non disponibile per $label")
         val manifest = liveApi.manifest(mediaUrl)
             ?: throw ErrorLoadingException("Il flusso di $label non si è risolto")
+        // L'indirizzo del CDN viaggia nei parametri invece di restare catturato nella lambda:
+        // il proxy tiene una sola sorgente per volta, e così ogni richiesta porta con sé tutto
+        // quello che serve a rispondere, anche a distanza di ore dal `play`.
+        val url = LocalProxy.playlist(
+            source = { params -> liveApi.rewrittenManifest(params["u"].orEmpty()) },
+            params = mapOf("u" to manifest),
+            forCast = isCasting,
+            mime = LocalProxy.MIME_DASH,
+        )
         callback(
             newExtractorLink(
                 source = name,
                 name = "$label (diretta)",
-                url = manifest,
+                url = url,
                 type = ExtractorLinkType.DASH
             ) {
                 this.quality = Qualities.Unknown.value

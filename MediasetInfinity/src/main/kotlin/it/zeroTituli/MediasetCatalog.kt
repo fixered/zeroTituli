@@ -95,14 +95,28 @@ class MediasetCatalog(
      * identici — uno a stagione — perché de-duplicare per `brandId` non li vedeva come
      * lo stesso programma. Filtrare le voci senza chiave **prima** di `distinctBy`, e non
      * dopo con `mapNotNull`, evita che tutte finiscano raggruppate sotto la chiave `null`.
+     *
+     * L'ordine finale lo decide `MediasetRanking`, e lo decide **dopo** lo scarto dei
+     * doppioni: prima si sceglie quale voce rappresenta il programma, poi si guarda se
+     * quel programma si apre. Ordinare prima significherebbe far scegliere alla regola
+     * gratis-prima *quale puntata* rappresenta il marchio, che non è la sua domanda.
+     *
+     * @param searchQuery il testo cercato, quando questi riquadri sono il risultato di una
+     *   ricerca; `null` per le righe di catalogo, che non hanno una richiesta con cui
+     *   confrontarsi.
      */
     fun MainAPI.brandCards(
         entries: List<FeedEntry>,
         rowCategory: String? = null,
-    ): List<SearchResponse> = entries
-        .mapNotNull { entry -> MediasetKeys.cardKeyFor(entry)?.let { key -> key to entry } }
-        .distinctBy { (key, _) -> key }
-        .mapNotNull { (_, entry) -> toSearchResponse(entry, rowCategory) }
+        searchQuery: String? = null,
+    ): List<SearchResponse> {
+        val unique = entries
+            .mapNotNull { entry -> MediasetKeys.cardKeyFor(entry)?.let { key -> key to entry } }
+            .distinctBy { (key, _) -> key }
+            .map { (_, entry) -> entry }
+        return MediasetRanking.ordered(unique, searchQuery)
+            .mapNotNull { entry -> toSearchResponse(entry, rowCategory) }
+    }
 
     /**
      * @param rowCategory la categoria della riga che mostra il riquadro, da cui si ricava
