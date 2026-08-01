@@ -53,6 +53,18 @@ class MediasetLiveTest {
     }
 
     @Test
+    fun `legge il logo del canale dal campo channel_logo della stazione`() {
+        // Fissato sull'indirizzo vero del campione: un assertNotNull sarebbe passato
+        // anche se il prefisso giusto fosse sparito e ne fosse rimasto in piedi un
+        // altro per caso. Qui invece una regressione sul prefisso si vede subito.
+        val info = MediasetLive.info(payload, fallbackLabel = "Canale 5")
+        assertEquals(
+            "https://static2.mediasetplay.mediaset.it/Mediaset_Italia_Production_-_Main/c5.png",
+            info!!.logo
+        )
+    }
+
+    @Test
     fun `senza programma in onda resta il nome del canale`() {
         val json = """{"response":{"tuningInstruction":{"urn:theplatform:tv:location:any":[]}}}"""
         val info = MediasetLive.info(json, fallbackLabel = "Italia 1")

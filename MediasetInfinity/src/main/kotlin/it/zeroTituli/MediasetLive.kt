@@ -62,9 +62,12 @@ object MediasetLive {
         return LiveInfo(
             title = station?.title?.takeIf { it.isNotBlank() } ?: fallbackLabel,
             nowPlaying = body.currentListing?.title?.takeIf { it.isNotBlank() },
+            // La stazione porta il logo sotto `channel_logo`: le altre famiglie sono
+            // quelle delle voci di programma, tenute come riserva se Mediaset cambia
+            // il payload della stazione, non da "ripulire".
             logo = MediasetImages.best(
                 station?.thumbnails.orEmpty(),
-                listOf("logo_horizontal", "brand_logo", "image_vertical")
+                listOf("channel_logo", "logo_horizontal", "brand_logo", "image_vertical")
             ),
             mediaUrl = clearMediaUrl(payload),
         )
