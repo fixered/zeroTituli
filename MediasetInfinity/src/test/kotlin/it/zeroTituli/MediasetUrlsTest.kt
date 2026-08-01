@@ -189,6 +189,60 @@ class MediasetUrlsTest {
     }
 
     @Test
+    fun `la query per titolo di programma chiede episodi film ed extra come byBrand`() {
+        // Stessa forma di `byBrand`, ma il filtro guarda il titolo del marchio invece del
+        // suo `brandId`: è la query che ritrova in un colpo solo tutte le edizioni di un
+        // programma che Mediaset spezza su marchi diversi, es. "Temptation Island"
+        // (100013024…100017150).
+        val url = MediasetUrls.byProgramTitle("Temptation Island", page = 1)
+        assertTrue(url.startsWith(MediasetUrls.FEED))
+        assertTrue(url.contains("form=cjson"))
+        assertTrue(url.contains("byCustomValue=%7BbrandTitle%7D%7BTemptation+Island%7D"))
+        assertTrue(url.contains("range=1-100"))
+        assertTrue(url.contains("byProgramType=episode%7Cmovie%7Cextra"))
+        assertTrue(url.contains("count=true"))
+    }
+
+    @Test
+    fun `la seconda pagina della query per titolo parte dove finisce la prima`() {
+        assertTrue(MediasetUrls.byProgramTitle("Temptation Island", page = 2).contains("range=101-200"))
+    }
+
+    @Test
+    fun `la query per titolo di programma proietta esattamente i campi della scheda`() {
+        // Stesso controllo forte di `la query per marchio chiede solo i campi che la
+        // scheda legge`: il confronto è sul valore intero di `fields=`, non su una
+        // sottostringa, perché una sottostringa passerebbe anche se il campo mancasse —
+        // è già successo con `sort=mediasetprogram$brandTitle|asc` nella riga alfabetica.
+        val byTitle = fieldsOf(MediasetUrls.byProgramTitle("Temptation Island", page = 1))
+        val byBrand = fieldsOf(MediasetUrls.byBrand("100013024", page = 1))
+        assertEquals(byBrand, byTitle)
+        assertEquals(
+            listOf(
+                "guid",
+                "title",
+                "description",
+                "longDescription",
+                "programType",
+                "year",
+                "runtime",
+                "tvSeasonNumber",
+                "tvSeasonEpisodeNumber",
+                "credits.personName",
+                "ratings",
+                "tags",
+                "thumbnails",
+                "mediasetprogram%24brandId",
+                "mediasetprogram%24brandTitle",
+                "mediasetprogram%24duration",
+                "mediasetprogram%24genres",
+                "mediasetprogram%24channelsRights",
+            ),
+            byTitle
+        )
+    }
+
+    @Test
     fun `la query per serie usa l indirizzo completo del programma`() {
         val url = MediasetUrls.bySeries("SE000000002040", page = 1)
         assertTrue(url.contains("bySeriesId="))

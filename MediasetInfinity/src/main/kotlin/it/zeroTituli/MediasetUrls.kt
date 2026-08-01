@@ -174,6 +174,24 @@ object MediasetUrls {
         )
     )
 
+    /**
+     * Le puntate di un programma raggruppato per titolo del marchio invece che per
+     * `brandId` (vedi `MediasetKeys.cardKeyFor`): stessa forma di [byBrand], stesso
+     * filtro sul tipo, stessa proiezione — cambia solo il campo del filtro, `brandTitle`
+     * al posto di `brandId`, così una query sola ritrova tutte le edizioni di un
+     * programma che Mediaset spezza su marchi diversi (`Temptation Island`: cinque
+     * `brandId` diversi, tutti con questo stesso titolo).
+     */
+    fun byProgramTitle(title: String, page: Int, perPage: Int = EPISODES_PER_PAGE) = feed(
+        mapOf(
+            "byCustomValue" to "{brandTitle}{$title}",
+            "byProgramType" to BRAND_PROGRAM_TYPES,
+            "range" to range(page, perPage),
+            "count" to "true",
+            "fields" to BRAND_FIELDS,
+        )
+    )
+
     fun bySeries(seriesGuid: String, page: Int, perPage: Int = 40) = feed(
         mapOf(
             "bySeriesId" to PROGRAM_BASE + seriesGuid,

@@ -88,15 +88,21 @@ class MediasetCatalog(
 
     /**
      * Il feed elenca episodi, non programmi: per il catalogo interessa un riquadro per
-     * programma, quindi si tiene la prima voce di ogni marchio.
+     * programma, quindi si tiene la prima voce di ogni chiave.
+     *
+     * Il raggruppamento è per `MediasetKeys.cardKeyFor`, non più per `brandId`: cinque
+     * marchi tutti intitolati "Temptation Island" davano prima cinque riquadri
+     * identici — uno a stagione — perché de-duplicare per `brandId` non li vedeva come
+     * lo stesso programma. Filtrare le voci senza chiave **prima** di `distinctBy`, e non
+     * dopo con `mapNotNull`, evita che tutte finiscano raggruppate sotto la chiave `null`.
      */
-    private fun MainAPI.brandCards(entries: List<FeedEntry>): List<SearchResponse> = entries
-        .filter { !it.brandId.isNullOrBlank() }
-        .distinctBy { it.brandId }
-        .mapNotNull { toSearchResponse(it) }
+    fun MainAPI.brandCards(entries: List<FeedEntry>): List<SearchResponse> = entries
+        .mapNotNull { entry -> MediasetKeys.cardKeyFor(entry)?.let { key -> key to entry } }
+        .distinctBy { (key, _) -> key }
+        .mapNotNull { (_, entry) -> toSearchResponse(entry) }
 
     fun MainAPI.toSearchResponse(entry: FeedEntry): SearchResponse? {
-        val brandId = entry.brandId ?: return null
+        val key = MediasetKeys.cardKeyFor(entry) ?: return null
         val name = entry.brandTitle?.takeIf { it.isNotBlank() } ?: entry.title ?: return null
         val poster = MediasetImages.poster(entry)
         // `fix = false` è obbligatorio: per default questi costruttori passano
@@ -104,17 +110,16 @@ class MediasetCatalog(
         // `mainUrl`. `brand:123` diventerebbe
         // `https://mediasetinfinity.mediaset.it/brand:123` e `load` non lo
         // riconoscerebbe più. Vale per tutte e tre le `new*SearchResponse`.
+        //
+        // La chiave qui e quella con cui `load` ricostruisce la scheda devono essere la
+        // stessa stringa (`cardKeyFor`), altrimenti aprire un preferito da questo riquadro
+        // porterebbe a una scheda diversa da quella che l'ha generato.
         return if (entry.programType == "movie") {
-            newMovieSearchResponse(name, MediasetKeys.brand(brandId), TvType.Movie, fix = false) {
+            newMovieSearchResponse(name, key, TvType.Movie, fix = false) {
                 this.posterUrl = poster
             }
         } else {
-            newTvSeriesSearchResponse(
-                name,
-                MediasetKeys.brand(brandId),
-                TvType.TvSeries,
-                fix = false
-            ) {
+            newTvSeriesSearchResponse(name, key, TvType.TvSeries, fix = false) {
                 this.posterUrl = poster
             }
         }

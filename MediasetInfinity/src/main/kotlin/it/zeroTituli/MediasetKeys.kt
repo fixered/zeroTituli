@@ -11,11 +11,14 @@ package it.zeroTituli
  *
  * **Il formato è un impegno verso l'utente**: le chiavi delle schede finiscono nei
  * preferiti salvati sul dispositivo. Cambiare un prefisso non rompe la compilazione,
- * rompe i preferiti di chi ha già il plugin: si aggiunge, non si rinomina.
+ * rompe i preferiti di chi ha già il plugin: si aggiunge, non si rinomina. Per questo
+ * `program:` (vedi [Card.Program]) si è aggiunto accanto a `brand:` invece di sostituirlo:
+ * `brand:` deve continuare a funzionare esattamente come prima.
  */
 object MediasetKeys {
 
     private const val BRAND = "brand:"
+    private const val PROGRAM = "program:"
     private const val SERIES = "series:"
     private const val SINGLE = "guid:"
     private const val LIVE = "live:"
@@ -31,8 +34,22 @@ object MediasetKeys {
 
     /** Quello che `load` riceve: una scheda di catalogo o un canale. */
     sealed class Card {
-        /** Un programma intero, con tutte le sue stagioni. */
+        /**
+         * Un programma intero, con tutte le sue stagioni, raggiunto per `brandId`.
+         *
+         * Resta per compatibilità con i preferiti già salvati e per i film: un `brandId`
+         * senza titolo utilizzabile (vedi [cardKeyFor]) finisce ancora qui.
+         */
         data class Brand(val brandId: String) : Card()
+
+        /**
+         * Lo stesso concetto di [Brand], ma raggiunto per titolo del marchio invece che per
+         * `brandId`. Mediaset spezza le edizioni di un programma che torna ogni anno
+         * (`Temptation Island`, `Uomini e Donne`, `Verissimo`, …) su `brandId` diversi: una
+         * scheda per titolo li ritrova tutti con una query sola, mentre una per `brandId`
+         * ne vedrebbe solo uno.
+         */
+        data class Program(val title: String) : Card()
 
         /** Una stagione letta dal markup del sito: il marchio si ricava poi dal feed. */
         data class Series(val seriesGuid: String) : Card()
@@ -45,6 +62,8 @@ object MediasetKeys {
 
     fun brand(brandId: String): String = BRAND + brandId
 
+    fun program(title: String): String = PROGRAM + title
+
     fun series(seriesGuid: String): String = SERIES + seriesGuid
 
     fun single(guid: String): String = SINGLE + guid
@@ -54,10 +73,51 @@ object MediasetKeys {
 
     fun card(raw: String): Card? = when {
         raw.startsWith(BRAND) -> raw.removePrefix(BRAND).filled()?.let(Card::Brand)
+        raw.startsWith(PROGRAM) -> raw.removePrefix(PROGRAM).filled()?.let(Card::Program)
         raw.startsWith(SERIES) -> raw.removePrefix(SERIES).filled()?.let(Card::Series)
         raw.startsWith(SINGLE) -> raw.removePrefix(SINGLE).filled()?.let(Card::Single)
         raw.startsWith(LIVE) -> raw.removePrefix(LIVE).filled()?.let(Card::Live)
         else -> null
+    }
+
+    /**
+     * I caratteri della sintassi dei filtri del feed (`byCustomValue={campo}{valore}`): un
+     * titolo che ne portasse uno costruirebbe una query storpiata, quindi non si può usare
+     * come chiave di raggruppamento.
+     */
+    private val RESERVED_TITLE_CHARS = charArrayOf('{', '}', '|')
+
+    /**
+     * La chiave della scheda per una voce di feed, decisa **sempre dal titolo**, non da
+     * quante edizioni capitano sulla stessa pagina.
+     *
+     * Mediaset dà un `brandId` diverso a ogni edizione di un programma che torna ogni
+     * anno: cinque marchi si chiamano tutti "Temptation Island" (100013024…100017150,
+     * stagioni 10-14), e raggrupparli per `brandId` come faceva prima dava cinque schede
+     * identiche invece di una con cinque stagioni. La regola:
+     *
+     * - un **film** (`programType == "movie"`) resta su `brand:<brandId>`: raggruppare i
+     *   film per titolo non porta nulla — non hanno stagioni da unire — e due film senza
+     *   parentela possono chiamarsi uguale (basti pensare ai remake);
+     * - altrimenti, se `brandTitle` non è vuoto e non porta `{`, `}` o `|` — la sintassi
+     *   dei filtri del feed — si usa `program:<brandTitle>`;
+     * - altrimenti si torna su `brand:<brandId>`, e se manca anche quello non c'è scheda.
+     *
+     * Decidere sempre per titolo, e non solo quando una pagina contiene già due marchi con
+     * lo stesso nome, è voluto: una pagina di catalogo spesso porta una sola edizione, e
+     * una regola "per pagina" darebbe comunque una scheda da una stagione sola. Decidendo
+     * per titolo, è `load` a scoprire quante edizioni esistono interrogando il feed per
+     * titolo — corretto a prescindere da cosa conteneva quella pagina.
+     */
+    fun cardKeyFor(entry: FeedEntry): String? {
+        val brandId = entry.brandId?.takeIf { it.isNotBlank() }
+        if (entry.programType == "movie") return brandId?.let(::brand)
+
+        val title = entry.brandTitle
+        if (!title.isNullOrBlank() && RESERVED_TITLE_CHARS.none { title.contains(it) }) {
+            return program(title)
+        }
+        return brandId?.let(::brand)
     }
 
     // ============= FLUSSI =============

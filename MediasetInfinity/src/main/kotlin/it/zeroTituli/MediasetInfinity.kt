@@ -91,18 +91,16 @@ class MediasetInfinity : MainAPI() {
             null -> null
         }
 
+    // La ricerca usava un `filter { brandId }.distinctBy { brandId }` per conto suo,
+    // identico a quello che oggi vive in `MediasetCatalog.brandCards`: senza riunirli, la
+    // ricerca avrebbe continuato a mostrare cinque risultati per "Temptation Island" anche
+    // dopo aver sistemato le righe del catalogo.
     override suspend fun search(query: String): List<SearchResponse> = with(catalog) {
-        api.entries(MediasetUrls.search(query, page = 1))
-            .filter { !it.brandId.isNullOrBlank() }
-            .distinctBy { it.brandId }
-            .mapNotNull { toSearchResponse(it) }
+        brandCards(api.entries(MediasetUrls.search(query, page = 1)))
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList = with(catalog) {
-        val items = api.entries(MediasetUrls.search(query, page))
-            .filter { !it.brandId.isNullOrBlank() }
-            .distinctBy { it.brandId }
-            .mapNotNull { toSearchResponse(it) }
+        val items = brandCards(api.entries(MediasetUrls.search(query, page)))
         newSearchResponseList(items, hasNext = items.isNotEmpty())
     }
 
@@ -115,6 +113,7 @@ class MediasetInfinity : MainAPI() {
             is MediasetKeys.Card.Live -> loadLive(card.callSign)
             is MediasetKeys.Card.Series -> loadSeries(card.seriesGuid)
             is MediasetKeys.Card.Brand -> loadBrand(card.brandId)
+            is MediasetKeys.Card.Program -> loadProgramByTitle(card.title)
             is MediasetKeys.Card.Single -> loadSingle(card.guid)
             null -> null
         }
@@ -140,8 +139,34 @@ class MediasetInfinity : MainAPI() {
         return loadBrand(brandId)
     }
 
-    private suspend fun loadBrand(brandId: String): LoadResponse? {
-        val entries = allEpisodes(brandId)
+    /** Un programma raggiunto per `brandId`: una query per marchio, come sempre. */
+    private suspend fun loadBrand(brandId: String): LoadResponse? = loadProgram(
+        cardKey = MediasetKeys.brand(brandId),
+        pageUrl = { page -> MediasetUrls.byBrand(brandId, page) },
+    )
+
+    /**
+     * Lo stesso programma di [loadBrand], ma raggiunto per titolo del marchio: la query
+     * per titolo ritrova da sola tutte le edizioni che Mediaset ha spezzato su `brandId`
+     * diversi (vedi `MediasetKeys.cardKeyFor` e `MediasetUrls.byProgramTitle`), quindi qui
+     * non serve nessuna logica in più — è la stessa identica paginazione di `loadBrand`,
+     * solo con un'altra query.
+     */
+    private suspend fun loadProgramByTitle(title: String): LoadResponse? = loadProgram(
+        cardKey = MediasetKeys.program(title),
+        pageUrl = { page -> MediasetUrls.byProgramTitle(title, page) },
+    )
+
+    /**
+     * Il corpo condiviso da [loadBrand] e [loadProgramByTitle]: paginare la query fino
+     * in fondo, scegliere la voce di testa, delegare il film solitario, e costruire la
+     * scheda serie con le stagioni. L'unica differenza fra le due strade è quale
+     * indirizzo interrogare e quale chiave dare alla scheda — passate qui come parametri
+     * invece di essere due copie dello stesso corpo, che sarebbero divergenti alla prima
+     * modifica fatta su una sola delle due.
+     */
+    private suspend fun loadProgram(cardKey: String, pageUrl: (Int) -> String): LoadResponse? {
+        val entries = allEntries(pageUrl)
         // Non la prima voce del feed: con gli extra in mezzo, la prima può essere un
         // promo, e la scheda prenderebbe titolo e copertina da un trailer.
         val head = MediasetSeasons.head(entries) ?: return null
@@ -174,7 +199,7 @@ class MediasetInfinity : MainAPI() {
 
         return newTvSeriesLoadResponse(
             name,
-            MediasetKeys.brand(brandId),
+            cardKey,
             TvType.TvSeries,
             episodes
         ) {
@@ -232,12 +257,15 @@ class MediasetInfinity : MainAPI() {
      * Le soap hanno migliaia di puntate: si scaricano a blocchi finché il feed ne dà,
      * con un tetto, perché una scheda con diecimila episodi non si scorre e intanto
      * l'app resta ad aspettare.
+     *
+     * `pageUrl` è l'unica differenza fra la query per `brandId` e quella per titolo del
+     * marchio: il ciclo di paginazione è lo stesso, quindi non si copia.
      */
-    private suspend fun allEpisodes(brandId: String): List<FeedEntry> {
+    private suspend fun allEntries(pageUrl: (Int) -> String): List<FeedEntry> {
         val all = mutableListOf<FeedEntry>()
         var page = 1
         while (page <= MAX_EPISODE_PAGES) {
-            val response = api.page(MediasetUrls.byBrand(brandId, page)) ?: break
+            val response = api.page(pageUrl(page)) ?: break
             val batch = response.entries
             if (batch.isEmpty()) break
             all += batch

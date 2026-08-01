@@ -23,6 +23,11 @@ class MediasetKeysTest {
     }
 
     @Test
+    fun `la chiave per titolo di programma ha il suo prefisso`() {
+        assertEquals("program:Temptation Island", MediasetKeys.program("Temptation Island"))
+    }
+
+    @Test
     fun `le chiavi dei flussi hanno il formato di sempre`() {
         assertEquals("vod:F007651601000101", MediasetKeys.vod("F007651601000101"))
         // Per una diretta la scheda e il flusso portano la stessa chiave: era così prima
@@ -45,6 +50,26 @@ class MediasetKeysTest {
         assertEquals(
             MediasetKeys.Card.Brand("100012714"),
             MediasetKeys.card(MediasetKeys.brand("100012714"))
+        )
+    }
+
+    @Test
+    fun `il titolo di programma torna indietro uguale`() {
+        assertEquals(
+            MediasetKeys.Card.Program("Temptation Island"),
+            MediasetKeys.card(MediasetKeys.program("Temptation Island"))
+        )
+    }
+
+    @Test
+    fun `un titolo con i due punti resta intero, perche il parsing e sul prefisso`() {
+        // `card` riconosce la chiave guardando solo il prefisso `program:` e prendendo
+        // tutto il resto della stringa: un titolo con `:` dentro (es. un sottotitolo) non
+        // deve fermare il parsing al primo `:` che incontra.
+        val title = "C'è posta per te: Puntata speciale"
+        assertEquals(
+            MediasetKeys.Card.Program(title),
+            MediasetKeys.card(MediasetKeys.program(title))
         )
     }
 
@@ -114,6 +139,7 @@ class MediasetKeysTest {
     @Test
     fun `un prefisso senza valore non e una chiave`() {
         assertNull(MediasetKeys.card("brand:"))
+        assertNull(MediasetKeys.card("program:"))
         assertNull(MediasetKeys.card("series:"))
         assertNull(MediasetKeys.card("guid:"))
         assertNull(MediasetKeys.card("live:"))
@@ -171,5 +197,121 @@ class MediasetKeysTest {
     fun `una chiave nuda passa senza essere toccata`() {
         val site = "https://mediasetinfinity.mediaset.it"
         assertEquals("live:C5", MediasetKeys.strip("live:C5", site))
+    }
+
+    // ============= CHIAVE DELLA SCHEDA PER VOCE DI FEED =============
+
+    /**
+     * `cardKeyFor` è la regola che decide se una voce di feed finisce sotto una scheda per
+     * titolo o per marchio: sbagliarla vuol dire tornare a cinque schede identiche per
+     * "Temptation Island", oppure costruire una query storpiata con un titolo che porta
+     * `{`, `}` o `|`. I valori attesi sono scritti a mano, non derivati dalla stessa
+     * funzione che si vuole provare.
+     */
+
+    @Test
+    fun `una voce di serie con titolo diventa una chiave per titolo`() {
+        val entry = FeedEntry(
+            guid = "FD1",
+            programType = "episode",
+            brandId = "100013024",
+            brandTitle = "Temptation Island",
+        )
+        assertEquals("program:Temptation Island", MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `edizioni diverse dello stesso programma condividono la stessa chiave per titolo`() {
+        // Sono i cinque marchi veri di "Temptation Island" (stagioni 10-14): brandId
+        // diversi, stesso titolo, quindi la stessa chiave.
+        val brandIds = listOf("100013024", "100014972", "100015201", "100016100", "100017150")
+        val keys = brandIds.map { id ->
+            MediasetKeys.cardKeyFor(
+                FeedEntry(guid = id, programType = "episode", brandId = id, brandTitle = "Temptation Island")
+            )
+        }
+        assertEquals(listOf("program:Temptation Island"), keys.distinct())
+    }
+
+    @Test
+    fun `un film resta sulla chiave per marchio anche con un titolo valido`() {
+        // Raggruppare i film per titolo non porta nulla — non hanno stagioni da unire — e
+        // due film senza parentela possono chiamarsi uguale.
+        val entry = FeedEntry(
+            guid = "F1",
+            programType = "movie",
+            brandId = "100002609",
+            brandTitle = "Il quarto Re",
+        )
+        assertEquals("brand:100002609", MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `un titolo con le graffe della sintassi dei filtri torna alla chiave per marchio`() {
+        val entry = FeedEntry(
+            guid = "FD2",
+            programType = "episode",
+            brandId = "100099999",
+            brandTitle = "Un programma {strano}",
+        )
+        assertEquals("brand:100099999", MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `un titolo con la barra verticale della sintassi dei filtri torna alla chiave per marchio`() {
+        val entry = FeedEntry(
+            guid = "FD3",
+            programType = "episode",
+            brandId = "100099998",
+            brandTitle = "Prima|Seconda",
+        )
+        assertEquals("brand:100099998", MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `un titolo vuoto torna alla chiave per marchio`() {
+        val entry = FeedEntry(guid = "FD4", programType = "episode", brandId = "100099997", brandTitle = "")
+        assertEquals("brand:100099997", MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `un titolo di soli spazi torna alla chiave per marchio`() {
+        val entry = FeedEntry(guid = "FD5", programType = "episode", brandId = "100099996", brandTitle = "   ")
+        assertEquals("brand:100099996", MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `senza titolo ne brandId non c e scheda`() {
+        val entry = FeedEntry(guid = "FD6", programType = "episode", brandId = null, brandTitle = null)
+        assertNull(MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `un titolo storpiato senza brandId non e comunque una scheda`() {
+        val entry = FeedEntry(guid = "FD7", programType = "episode", brandId = null, brandTitle = "Con {graffe}")
+        assertNull(MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `un film senza brandId non e una scheda`() {
+        val entry = FeedEntry(guid = "F2", programType = "movie", brandId = null, brandTitle = "Un film")
+        assertNull(MediasetKeys.cardKeyFor(entry))
+    }
+
+    @Test
+    fun `il raggruppamento per chiave riunisce le edizioni e separa i programmi diversi`() {
+        // Come farebbe `MediasetCatalog.brandCards`: cinque edizioni di "Temptation
+        // Island" più due voci di un programma diverso devono dare due chiavi, non sette.
+        val temptationEditions = listOf("100013024", "100014972", "100015201", "100016100", "100017150")
+            .map { id -> FeedEntry(guid = id, programType = "episode", brandId = id, brandTitle = "Temptation Island") }
+        val otherProgram = listOf(
+            FeedEntry(guid = "U1", programType = "episode", brandId = "100020001", brandTitle = "Uomini e Donne"),
+            FeedEntry(guid = "U2", programType = "episode", brandId = "100020002", brandTitle = "Uomini e Donne"),
+        )
+        val keys = (temptationEditions + otherProgram).mapNotNull { MediasetKeys.cardKeyFor(it) }.distinct()
+        assertEquals(
+            listOf("program:Temptation Island", "program:Uomini e Donne"),
+            keys
+        )
     }
 }
