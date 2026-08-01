@@ -300,22 +300,32 @@ class MediasetInfinity : MainAPI() {
                 is MediasetKeys.Data.Live -> liveLink(key.callSign, callback)
                 is MediasetKeys.Data.Vod -> vodLink(key.guid, isCasting, callback)
                 null -> {
-                    report(callback, "chiave non riconosciuta: '$data'")
+                    report(callback, "chiave non riconosciuta '$data'")
                     true
                 }
             }
         }.getOrElse { error ->
-            report(callback, "${error::class.java.simpleName}: ${error.message}")
+            // Per ErrorLoadingException il messaggio è già la spiegazione: aggiungere il
+            // nome della classe mangerebbe lo spazio visibile del nome della sorgente.
+            val reason = error.message?.takeIf { it.isNotBlank() }
+                ?: error::class.java.simpleName
+            report(callback, reason)
             true
         }
     }
 
-    /** DIAGNOSTICA TEMPORANEA: una sorgente finta il cui nome è il motivo del guasto. */
+    /**
+     * DIAGNOSTICA TEMPORANEA: una sorgente finta il cui **nome** è il motivo del guasto.
+     *
+     * Va letta, non premuta: l'indirizzo non esiste, quindi premendola il player risponde
+     * `ERROR_CODE_IO_BAD_HTTP_STATUS`, che è un errore mio e non dice niente. Il motivo sta
+     * all'inizio del nome perché nell'elenco lo spazio è poco e la coda viene troncata.
+     */
     private suspend fun report(callback: (ExtractorLink) -> Unit, reason: String) {
         callback(
             newExtractorLink(
-                source = name,
-                name = "DIAGNOSI — $reason",
+                source = "LEGGI QUI",
+                name = reason,
                 url = "https://mediasetinfinity.mediaset.it/diagnosi.m3u8",
                 type = ExtractorLinkType.M3U8
             ) {
