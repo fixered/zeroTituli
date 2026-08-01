@@ -44,14 +44,14 @@ class MediasetCatalog(
         }.getOrNull().orEmpty()
 
         val rows = MediasetSections.read(html).mapNotNull { row ->
-            val items = row.items.mapNotNull { toSearchResponse(it) }
+            val items = row.items.mapNotNull { toSearchResponse(it, section.feedCategory) }
             if (items.isEmpty()) null else HomePageList("${section.label} · ${row.title}", items)
         }
         if (rows.isNotEmpty()) return rows
 
         // Ripiego: la sezione resta, cambia l'ordine.
         val entries = api.entries(MediasetUrls.byCategory(section.feedCategory, page = 1))
-        val items = brandCards(entries)
+        val items = brandCards(entries, section.feedCategory)
         return if (items.isEmpty()) emptyList() else listOf(HomePageList(section.label, items))
     }
 
@@ -73,16 +73,16 @@ class MediasetCatalog(
             // si aggiunge all'apertura di ogni scheda, quindi va tenuta leggera.
             MediasetUrls.byCategory(category, page = 1, perPage = RECOMMENDATIONS_PER_PAGE)
         ).filter { it.brandId != excludeBrandId }
-        return brandCards(entries).take(RECOMMENDATIONS)
+        return brandCards(entries, category).take(RECOMMENDATIONS)
     }
 
     suspend fun MainAPI.genreRow(genre: String, page: Int): HomePageList? {
-        val items = brandCards(api.entries(MediasetUrls.byGenre(genre, page)))
+        val items = brandCards(api.entries(MediasetUrls.byGenre(genre, page)), genre)
         return if (items.isEmpty()) null else HomePageList(genre, items)
     }
 
     suspend fun MainAPI.alphabeticalRow(category: String, page: Int): HomePageList? {
-        val items = brandCards(api.entries(MediasetUrls.alphabetical(category, page)))
+        val items = brandCards(api.entries(MediasetUrls.alphabetical(category, page)), category)
         return if (items.isEmpty()) null else HomePageList("$category dalla A alla Z", items)
     }
 
@@ -96,12 +96,24 @@ class MediasetCatalog(
      * lo stesso programma. Filtrare le voci senza chiave **prima** di `distinctBy`, e non
      * dopo con `mapNotNull`, evita che tutte finiscano raggruppate sotto la chiave `null`.
      */
-    fun MainAPI.brandCards(entries: List<FeedEntry>): List<SearchResponse> = entries
+    fun MainAPI.brandCards(
+        entries: List<FeedEntry>,
+        rowCategory: String? = null,
+    ): List<SearchResponse> = entries
         .mapNotNull { entry -> MediasetKeys.cardKeyFor(entry)?.let { key -> key to entry } }
         .distinctBy { (key, _) -> key }
-        .mapNotNull { (_, entry) -> toSearchResponse(entry) }
+        .mapNotNull { (_, entry) -> toSearchResponse(entry, rowCategory) }
 
-    fun MainAPI.toSearchResponse(entry: FeedEntry): SearchResponse? {
+    /**
+     * @param rowCategory la categoria della riga che mostra il riquadro, da cui si ricava
+     *   il `TvType`: è quello che fa funzionare i chip in cima alla Home. Non si ricava
+     *   dalla voce, perché la proiezione `fields=` delle righe non porta i `tags` e
+     *   `entry.categories` sarebbe vuoto — vedi `MediasetLabels.kind`.
+     */
+    fun MainAPI.toSearchResponse(
+        entry: FeedEntry,
+        rowCategory: String? = null,
+    ): SearchResponse? {
         val key = MediasetKeys.cardKeyFor(entry) ?: return null
         val name = entry.brandTitle?.takeIf { it.isNotBlank() } ?: entry.title ?: return null
         val poster = MediasetImages.poster(entry)
@@ -114,14 +126,25 @@ class MediasetCatalog(
         // La chiave qui e quella con cui `load` ricostruisce la scheda devono essere la
         // stessa stringa (`cardKeyFor`), altrimenti aprire un preferito da questo riquadro
         // porterebbe a una scheda diversa da quella che l'ha generato.
-        return if (entry.programType == "movie") {
-            newMovieSearchResponse(name, key, TvType.Movie, fix = false) {
-                this.posterUrl = poster
-            }
-        } else {
-            newTvSeriesSearchResponse(name, key, TvType.TvSeries, fix = false) {
-                this.posterUrl = poster
-            }
+        return when (MediasetLabels.kind(rowCategory, entry.programType)) {
+            MediasetLabels.CardKind.MOVIE ->
+                newMovieSearchResponse(name, key, TvType.Movie, fix = false) {
+                    this.posterUrl = poster
+                }
+            // Documentari e Cartoni passano dallo stesso costruttore delle serie: quello
+            // che cambia è il `TvType`, che è ciò su cui i chip filtrano.
+            MediasetLabels.CardKind.DOCUMENTARY ->
+                newTvSeriesSearchResponse(name, key, TvType.Documentary, fix = false) {
+                    this.posterUrl = poster
+                }
+            MediasetLabels.CardKind.KIDS ->
+                newTvSeriesSearchResponse(name, key, TvType.Cartoon, fix = false) {
+                    this.posterUrl = poster
+                }
+            MediasetLabels.CardKind.SERIES ->
+                newTvSeriesSearchResponse(name, key, TvType.TvSeries, fix = false) {
+                    this.posterUrl = poster
+                }
         }
     }
 
@@ -129,12 +152,23 @@ class MediasetCatalog(
      * Le voci lette dal sito portano l'identificativo della stagione: il marchio si
      * ricava alla prima apertura della scheda, quindi qui basta passarlo com'è.
      */
-    private fun MainAPI.toSearchResponse(item: SectionItem): SearchResponse? {
+    private fun MainAPI.toSearchResponse(
+        item: SectionItem,
+        rowCategory: String? = null,
+    ): SearchResponse? {
         val guid = item.seriesGuid ?: return null
+        // Le voci lette dal markup non dicono il `programType`, quindi qui il tipo lo
+        // decide la sola categoria della sezione: un film in una riga editoriale resta
+        // annunciato come serie, ma la scheda che si apre è quella giusta.
+        val type = when (MediasetLabels.kind(rowCategory, programType = null)) {
+            MediasetLabels.CardKind.KIDS -> TvType.Cartoon
+            MediasetLabels.CardKind.DOCUMENTARY -> TvType.Documentary
+            else -> TvType.TvSeries
+        }
         return newTvSeriesSearchResponse(
             item.title,
             MediasetKeys.series(guid),
-            TvType.TvSeries,
+            type,
             fix = false
         ) {
             this.posterUrl = item.poster

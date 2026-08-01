@@ -289,11 +289,39 @@ class MediasetInfinity : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return when (val key = MediasetKeys.data(data)) {
-            is MediasetKeys.Data.Live -> liveLink(key.callSign, callback)
-            is MediasetKeys.Data.Vod -> vodLink(key.guid, isCasting, callback)
-            null -> false
+        // DIAGNOSTICA TEMPORANEA — da togliere.
+        //
+        // `APIRepository.loadLinks` cattura qualunque Throwable e torna `false`, quindi
+        // "nessun link trovato" è il messaggio unico di sei cause diverse più ogni
+        // errore a runtime: dal telefono non si distingue niente. Qui la causa vera
+        // viene messa nel nome di una sorgente, che nell'elenco si legge senza `adb`.
+        return runCatching {
+            when (val key = MediasetKeys.data(data)) {
+                is MediasetKeys.Data.Live -> liveLink(key.callSign, callback)
+                is MediasetKeys.Data.Vod -> vodLink(key.guid, isCasting, callback)
+                null -> {
+                    report(callback, "chiave non riconosciuta: '$data'")
+                    true
+                }
+            }
+        }.getOrElse { error ->
+            report(callback, "${error::class.java.simpleName}: ${error.message}")
+            true
         }
+    }
+
+    /** DIAGNOSTICA TEMPORANEA: una sorgente finta il cui nome è il motivo del guasto. */
+    private suspend fun report(callback: (ExtractorLink) -> Unit, reason: String) {
+        callback(
+            newExtractorLink(
+                source = name,
+                name = "DIAGNOSI — $reason",
+                url = "https://mediasetinfinity.mediaset.it/diagnosi.m3u8",
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.quality = Qualities.Unknown.value
+            }
+        )
     }
 
     /**

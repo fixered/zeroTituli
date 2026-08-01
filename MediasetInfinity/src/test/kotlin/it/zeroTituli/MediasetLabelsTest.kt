@@ -113,4 +113,75 @@ class MediasetLabelsTest {
         assertEquals("Trama", MediasetLabels.description(free))
         assertTrue(MediasetLabels.description(paid)!!.contains("abbonamento o un noleggio"))
     }
+
+    // ============= TIPO DELLA SCHEDA (i chip in cima alla Home) =============
+
+    @Test
+    fun `un film resta un film anche nella riga Kids`() {
+        // Nei chip di CloudStream "Cartoni" raccoglie le serie animate: un film per
+        // bambini lo si cerca sotto Film, non sotto Cartoni.
+        assertEquals(
+            MediasetLabels.CardKind.MOVIE,
+            MediasetLabels.kind(rowCategory = "Kids", programType = "movie")
+        )
+    }
+
+    @Test
+    fun `la riga Kids da schede di tipo Cartoni`() {
+        assertEquals(
+            MediasetLabels.CardKind.KIDS,
+            MediasetLabels.kind(rowCategory = "Kids", programType = "episode")
+        )
+    }
+
+    @Test
+    fun `la riga Documentari da schede di tipo Documentario`() {
+        assertEquals(
+            MediasetLabels.CardKind.DOCUMENTARY,
+            MediasetLabels.kind(rowCategory = "Documentari", programType = "episode")
+        )
+    }
+
+    @Test
+    fun `il genere Documentari vale come la categoria`() {
+        // Le righe per genere passano il nome del genere, e "Documentari" compare in
+        // entrambi i vocabolari: il chip deve funzionare anche da lì.
+        assertEquals(
+            MediasetLabels.CardKind.DOCUMENTARY,
+            MediasetLabels.kind(rowCategory = "Documentari", programType = null)
+        )
+    }
+
+    @Test
+    fun `le altre categorie danno una serie`() {
+        assertEquals(
+            MediasetLabels.CardKind.SERIES,
+            MediasetLabels.kind(rowCategory = "Fiction", programType = "episode")
+        )
+        assertEquals(
+            MediasetLabels.CardKind.SERIES,
+            MediasetLabels.kind(rowCategory = "Calcio e Sport", programType = "extra")
+        )
+    }
+
+    @Test
+    fun `senza categoria una voce non film resta una serie`() {
+        // È il caso della ricerca, che non ha categoria da cui dedurre.
+        assertEquals(
+            MediasetLabels.CardKind.SERIES,
+            MediasetLabels.kind(rowCategory = null, programType = "episode")
+        )
+        assertEquals(
+            MediasetLabels.CardKind.MOVIE,
+            MediasetLabels.kind(rowCategory = null, programType = "movie")
+        )
+    }
+
+    @Test
+    fun `la categoria si riconosce a prescindere dalle maiuscole`() {
+        assertEquals(
+            MediasetLabels.CardKind.KIDS,
+            MediasetLabels.kind(rowCategory = "kids", programType = "episode")
+        )
+    }
 }
