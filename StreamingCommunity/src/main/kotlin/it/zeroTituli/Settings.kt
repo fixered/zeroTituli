@@ -91,7 +91,9 @@ class Settings(
         // Il dominio in uso adesso: quello scritto a mano, altrimenti quello trovato da solo.
         view.byName<TextView>("current_domain_tw")?.text =
             (text("current_domain_label") ?: "Dominio in uso") + ": " +
-                (currentBaseUrl.ifBlank { SiteDomain.cached(sharedPref) ?: SiteDomain.DEFAULT })
+                currentBaseUrl.ifBlank {
+                    SiteDomain.cached(sharedPref)?.root ?: SiteDomain.DEFAULT_ROOT
+                }
 
         val langs = arrayOf("it", "en")
         val langsDropdown: Spinner? = view.byName("lang_spinner")

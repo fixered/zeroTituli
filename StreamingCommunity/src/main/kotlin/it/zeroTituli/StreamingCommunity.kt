@@ -54,10 +54,11 @@ class StreamingCommunity(
     private val showUpcoming: Boolean = true
 ) : MainAPI() {
 
-    private var siteRootUrl = SiteDomain.normalize(customBaseUrl)
+    private var site = SiteDomain.manual(customBaseUrl)
         ?: SiteDomain.cached(prefs)
-        ?: SiteDomain.DEFAULT
-    private var cdnHost = "cdn." + siteRootUrl.toHttpUrl().host
+        ?: SiteDomain.Site(SiteDomain.DEFAULT_ROOT, SiteDomain.DEFAULT_CDN)
+    private val siteRootUrl get() = site.root
+    private val cdnUrl get() = site.cdn
 
     private var inertiaVersion = ""
     private var decodedXsrfToken = ""
@@ -104,11 +105,10 @@ class StreamingCommunity(
      */
     private suspend fun ensureDomain() {
         if (customBaseUrl != null) return
-        val root = SiteDomain.current(prefs)
-        if (root == siteRootUrl) return
-        siteRootUrl = root
-        cdnHost = "cdn." + root.toHttpUrl().host
-        mainUrl = root + lang
+        val found = SiteDomain.current(prefs)
+        if (found == site) return
+        site = found
+        mainUrl = found.root + lang
         headers["Cookie"] = ""
         headers["X-Inertia-Version"] = ""
         inertiaVersion = ""
@@ -195,11 +195,11 @@ class StreamingCommunity(
             val url = "$mainUrl/titles/${title.id}-${title.slug}"
             if (title.type == "tv") {
                 newTvSeriesSearchResponse(title.name, url) {
-                    posterUrl = "https://$cdnHost/images/" + title.getPoster()
+                    posterUrl = "$cdnUrl/images/" + title.getPoster()
                 }
             } else {
                 newMovieSearchResponse(title.name, url) {
-                    posterUrl = "https://$cdnHost/images/" + title.getPoster()
+                    posterUrl = "$cdnUrl/images/" + title.getPoster()
                 }
             }
         }
@@ -278,7 +278,7 @@ class StreamingCommunity(
         val related = props.sliders?.getOrNull(0)
         val trailers = title.trailers?.mapNotNull { it.getYoutubeUrl() }.orEmpty()
         val poster = posterOf(title)
-        val backdrop = title.getBackgroundImageId()?.let { "https://$cdnHost/images/$it" }
+        val backdrop = title.getBackgroundImageId()?.let { "$cdnUrl/images/$it" }
 
         if (title.type == "tv") {
             val episodes = episodesOf(props)
@@ -319,7 +319,7 @@ class StreamingCommunity(
     /** La copertina del sito è tagliata: quando c'è l'id TMDb si prende quella, più grande. */
     private suspend fun posterOf(title: TitleProp): String? {
         if (title.tmdbId == null) {
-            return title.getBackgroundImageId()?.let { "https://$cdnHost/images/$it" }
+            return title.getBackgroundImageId()?.let { "$cdnUrl/images/$it" }
         }
         val fromTmdb = runCatching {
             app.get("https://www.themoviedb.org/${title.type}/${title.tmdbId}")
@@ -327,7 +327,7 @@ class StreamingCommunity(
                 .split(", ").lastOrNull()?.substringBefore(' ')
         }.getOrNull()
         return fromTmdb?.takeIf { it.startsWith("http") }
-            ?: title.getPosterImageId()?.let { "https://$cdnHost/images/$it" }
+            ?: title.getPosterImageId()?.let { "$cdnUrl/images/$it" }
     }
 
     /**
