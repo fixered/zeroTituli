@@ -1,6 +1,5 @@
 package it.zeroTituli
 
-import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
@@ -139,7 +138,7 @@ class MediasetInfinity : MainAPI() {
         url.removePrefix("$mainUrl/").removePrefix(mainUrl)
 
     private suspend fun loadLive(callSign: String): LoadResponse? {
-        val label = MediasetLive.CHANNELS.firstOrNull { it.callSign == callSign }?.label ?: callSign
+        val label = MediasetLive.labelFor(callSign)
         val info = liveApi.info(callSign, label) ?: return null
         return newLiveStreamLoadResponse(
             name = info.title,
@@ -182,8 +181,8 @@ class MediasetInfinity : MainAPI() {
         return newTvSeriesLoadResponse(name, "brand:$brandId", TvType.TvSeries, episodes) {
             this.posterUrl = MediasetImages.poster(head)
             this.backgroundPosterUrl = MediasetImages.background(head)
-            this.plot = describe(head)
-            this.tags = tagsOf(head)
+            this.plot = MediasetLabels.description(head)
+            this.tags = MediasetLabels.tags(head)
             this.year = head.year
             this.contentRating = head.ageRating
             addActors(head.actors)
@@ -198,8 +197,8 @@ class MediasetInfinity : MainAPI() {
         return newMovieLoadResponse(name, "guid:$guid", TvType.Movie, dataUrl = "vod:$guid") {
             this.posterUrl = MediasetImages.poster(entry)
             this.backgroundPosterUrl = MediasetImages.background(entry)
-            this.plot = describe(entry)
-            this.tags = tagsOf(entry)
+            this.plot = MediasetLabels.description(entry)
+            this.tags = MediasetLabels.tags(entry)
             this.year = entry.year
             this.duration = entry.durationMinutes
             this.contentRating = entry.ageRating
@@ -224,22 +223,6 @@ class MediasetInfinity : MainAPI() {
         return all
     }
 
-    /**
-     * I generi, più l'etichetta "Abbonamento" quando il contenuto non è gratuito: si
-     * vede in cima alla scheda, prima di provare ad aprirlo.
-     */
-    private fun tagsOf(entry: FeedEntry): List<String> =
-        if (entry.isFree) entry.genres else listOf("Abbonamento") + entry.genres
-
-    /** Alla trama si aggiunge l'avviso quando il contenuto non è gratuito. */
-    private fun describe(entry: FeedEntry): String? {
-        val plot = entry.plot
-        if (entry.isFree) return plot
-        val warning = "Serve un abbonamento o un noleggio Mediaset Infinity: " +
-            "con la sessione anonima questo contenuto non parte."
-        return listOfNotNull(warning, plot).joinToString("\n\n")
-    }
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -256,7 +239,7 @@ class MediasetInfinity : MainAPI() {
      * le apre da solo, senza proxy e senza header da rimettere.
      */
     private suspend fun liveLink(callSign: String, callback: (ExtractorLink) -> Unit): Boolean {
-        val label = MediasetLive.CHANNELS.firstOrNull { it.callSign == callSign }?.label ?: callSign
+        val label = MediasetLive.labelFor(callSign)
         val mediaUrl = liveApi.info(callSign, label)?.mediaUrl ?: return false
         val manifest = liveApi.manifest(mediaUrl) ?: return false
         callback(

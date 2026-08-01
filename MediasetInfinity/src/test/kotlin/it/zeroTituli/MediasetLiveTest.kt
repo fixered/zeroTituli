@@ -84,4 +84,10 @@ class MediasetLiveTest {
         assertEquals(signs.size, signs.distinct().size)
         assertTrue(MediasetLive.CHANNELS.any { it.callSign == "C5" })
     }
+
+    @Test
+    fun `labelFor risolve un callSign noto al suo nome, uno ignoto resta invariato`() {
+        assertEquals("Canale 5", MediasetLive.labelFor("C5"))
+        assertEquals("XX", MediasetLive.labelFor("XX"))
+    }
 }

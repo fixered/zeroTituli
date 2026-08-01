@@ -45,6 +45,10 @@ object MediasetLive {
 
     private const val ANY = "urn:theplatform:tv:location:any"
 
+    /** Il nome da mostrare per un canale; se il `callSign` non è in lista resta lui stesso. */
+    fun labelFor(callSign: String): String =
+        CHANNELS.firstOrNull { it.callSign == callSign }?.label ?: callSign
+
     /**
      * L'indirizzo theplatform della variante in chiaro, da risolvere poi in SMIL.
      * Il DASH viene prima: è quello che il ricevitore predefinito del Chromecast legge.
