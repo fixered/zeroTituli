@@ -12,8 +12,7 @@ import com.lagradost.cloudstream3.TvType
  * progetto, in docs/superpowers/specs/2026-08-01-mediaset-infinity-design.md.
  */
 class MediasetInfinity : MainAPI() {
-    // TODO(attività 3): sostituire con MediasetUrls.SITE quando l'oggetto esiste.
-    override var mainUrl = "https://mediasetinfinity.mediaset.it"
+    override var mainUrl = MediasetUrls.SITE
     override var name = "Mediaset Infinity"
     override var lang = "it"
     override val hasMainPage = true
