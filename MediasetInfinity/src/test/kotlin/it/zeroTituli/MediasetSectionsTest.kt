@@ -42,6 +42,15 @@ class MediasetSectionsTest {
     }
 
     @Test
+    fun `l identificativo della serie scarta il secondo identificativo dopo la virgola`() {
+        // Alcune schede del campione hanno un indirizzo tipo
+        // `.../chicagomed/stagione7_SE000000000661,ST000000003784`: il pezzo dopo la
+        // virgola non va nella query al feed, quindi seriesGuid deve fermarsi a `SE...`.
+        val item = rows.flatMap { it.items }.first { it.href.contains("_SE000000000661,ST000000003784") }
+        assertEquals("SE000000000661", item.seriesGuid)
+    }
+
+    @Test
     fun `le entita HTML nei titoli vengono sciolte`() {
         // Nel markup i titoli arrivano con &#x27; al posto dell'apostrofo.
         assertTrue(rows.flatMap { it.items }.none { it.title.contains("&#") })

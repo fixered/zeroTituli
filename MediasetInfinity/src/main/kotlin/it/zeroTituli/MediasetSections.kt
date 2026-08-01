@@ -73,8 +73,12 @@ object MediasetSections {
             title = title,
             href = href,
             // `/fiction/lapromessa_SE000000002040`: l'ultimo pezzo è la stagione, e
-            // da lì si risale al programma con una query al feed.
-            seriesGuid = href.substringAfterLast('_').takeIf { it.startsWith("SE") },
+            // da lì si risale al programma con una query al feed. Alcune schede portano
+            // un secondo identificativo dopo una virgola (es. `SE...,ST...`): va tenuto
+            // solo il pezzo `SE...`, perché è l'unico che la query al feed accetta.
+            seriesGuid = href.substringAfterLast('_')
+                .split(',')
+                .firstOrNull { it.startsWith("SE") },
             poster = posterOf(link),
         )
     }
