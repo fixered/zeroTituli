@@ -128,3 +128,45 @@ data class PlaybackCheckBody(
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class MediaSelector(val url: String? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class NowNextResponse(val response: NowNextBody? = null, val isOk: Boolean? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class NowNextBody(
+    val tuningInstruction: Map<String, List<Tuning>> = emptyMap(),
+    val currentListing: Listing? = null,
+    val stations: Map<String, Station> = emptyMap(),
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class Tuning(
+    val format: String? = null,
+    val protectionScheme: String? = null,
+    val publicUrls: List<String> = emptyList(),
+)
+
+/**
+ * Nel campione vero non c'è un campo `title` diretto: l'EPG scrive il nome del
+ * programma in `mediasetlisting$epgTitle`, mentre `program.title` porta il titolo del
+ * singolo episodio (es. "Episodio 60" invece di "Tutto per la mia famiglia"). Si
+ * preferisce l'EPG perché è quello leggibile nella guida; l'episodio resta la riserva.
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class Listing(
+    @JsonProperty("mediasetlisting\$epgTitle") val epgTitle: String? = null,
+    val program: ListingProgram? = null,
+) {
+    val title: String?
+        get() = epgTitle?.takeIf { it.isNotBlank() } ?: program?.title
+}
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ListingProgram(val title: String? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class Station(
+    val title: String? = null,
+    val callSign: String? = null,
+    val thumbnails: Map<String, Thumbnail> = emptyMap(),
+)
