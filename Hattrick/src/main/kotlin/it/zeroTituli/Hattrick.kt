@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import it.zeroTituli.shared.Covers
+import it.zeroTituli.shared.LocalProxy
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.util.concurrent.atomic.AtomicBoolean
@@ -169,7 +170,7 @@ class Hattrick : MainAPI() {
         ev.channels.amap { ch ->
             val link = runCatching { resolveChannel(ch) }.getOrNull()
             if (link != null) {
-                callback(link)
+                callback(forCast(link, isCasting))
                 any.set(true)
             }
         }
@@ -179,13 +180,33 @@ class Hattrick : MainAPI() {
             for (ch in ev.channels.take(webViewFallbackChannels)) {
                 val link = runCatching { resolveChannelWithWebView(ch) }.getOrNull()
                 if (link != null) {
-                    callback(link)
+                    callback(forCast(link, isCasting))
                     any.set(true)
                     break
                 }
             }
         }
         return any.get()
+    }
+
+    /**
+     * Cloudstream manda al Chromecast solo l'indirizzo (`CastHelper`: `MediaInfo.Builder(link.url)`)
+     * e usa il receiver predefinito di Google: `User-Agent`, `Referer` e `Origin` restano a terra e
+     * i CDN che li pretendono rispondono con un errore, per cui il televisore carica e poi annulla.
+     * In casting il flusso passa quindi dal proxy locale, che è il telefono a interrogare il CDN.
+     */
+    private suspend fun forCast(link: ExtractorLink, isCasting: Boolean): ExtractorLink {
+        if (!isCasting || link.type != ExtractorLinkType.M3U8) return link
+        val headers = link.headers + mapOf("Referer" to link.referer)
+        val proxied = LocalProxy.hls(link.url, headers, forCast = true)
+        return newExtractorLink(
+            source = link.source,
+            name = link.name,
+            url = proxied,
+            type = link.type
+        ) {
+            this.quality = link.quality
+        }
     }
 
     // ============= SCRAPING =============

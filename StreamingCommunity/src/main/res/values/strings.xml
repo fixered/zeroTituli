@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="header_tw">StreamingCommunity</string>
+    <string name="lang_label">Lingua</string>
+    <string name="upcoming_label">Mostra le uscite future</string>
+    <string name="it">🇮🇹 Italiano</string>
+    <string name="en">🇬🇧 Inglese</string>
+    <string name="current_domain_label">Dominio in uso</string>
+    <string name="server_address_label">Indirizzo del sito</string>
+    <string name="server_address_hint">Lascia vuoto: il dominio viene trovato da solo</string>
+    <string name="settings_saved">Impostazioni salvate. Riavvia l\'app per applicarle</string>
+</resources>

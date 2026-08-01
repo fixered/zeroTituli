@@ -3,6 +3,7 @@ package it.zeroTituli
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import it.zeroTituli.shared.Covers
+import it.zeroTituli.shared.LocalProxy
 import it.zeroTituli.shared.MatchFilter
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -155,7 +156,7 @@ class Fctv33 : MainAPI() {
         val match = findMatch(data) ?: return false
         val channels = fetchChannels(match.id)
         if (channels.isEmpty()) return false
-        channels.forEach { channel -> callback(buildLink(match, channel)) }
+        channels.forEach { channel -> callback(buildLink(match, channel, isCasting)) }
         return true
     }
 
@@ -323,18 +324,22 @@ class Fctv33 : MainAPI() {
     }.getOrNull()
 
     /**
-     * Le playlist passano dal proxy locale, i segmenti no: il player li scarica dai mirror con il
-     * `Referer` del dominio del player, che il CDN pretende.
+     * In riproduzione locale dal proxy passano solo le playlist: i segmenti li scarica il player
+     * dai mirror con il `Referer` del dominio del player, che il CDN pretende. In casting il
+     * `Referer` lo perderemmo (Cloudstream manda al televisore solo l'indirizzo), quindi passano
+     * dal proxy anche i segmenti.
      */
-    private suspend fun buildLink(m: Match, channel: Channel): ExtractorLink {
+    private suspend fun buildLink(m: Match, channel: Channel, isCasting: Boolean): ExtractorLink {
         val origin = playerDomains().firstOrNull() ?: fallbackPlayerDomains.first()
-        val url = HlsProxy.link(
-            resolver = { params -> playlist(params) },
+        val url = LocalProxy.playlist(
+            source = { params -> playlist(params) },
             params = mapOf(
                 "m" to m.id.toString(),
                 "s" to channel.id.toString(),
-                "t" to channel.siteType.toString()
-            )
+                "t" to channel.siteType.toString(),
+                "c" to if (isCasting) "1" else "0"
+            ),
+            forCast = isCasting
         )
         val label = listOf(channel.name, m.league).firstOrNull { it.isNotBlank() } ?: this.name
         return newExtractorLink(
@@ -352,23 +357,33 @@ class Fctv33 : MainAPI() {
     /** Risponde al proxy: ricalcola l'indirizzo del flusso, scarica la playlist e la riscrive. */
     private suspend fun playlist(params: Map<String, String>): String? {
         val (country, continent) = geo()
+        val isCasting = params["c"] == "1"
         val upstream = params["u"] ?: run {
             val matchId = params["m"]?.toLongOrNull() ?: return null
             val streamId = params["s"]?.toLongOrNull() ?: return null
             val siteType = params["t"]?.toLongOrNull() ?: return null
             playlistUrl(matchId, Channel(streamId, "", siteType)) ?: return null
         }
+        val origin = playerDomains().firstOrNull() ?: mainUrl
         val body = runCatching {
-            app.get(
-                upstream,
-                headers = mapOf("User-Agent" to ua),
-                referer = "${playerDomains().firstOrNull() ?: mainUrl}/"
-            ).text
+            app.get(upstream, headers = mapOf("User-Agent" to ua), referer = "$origin/").text
         }.getOrNull()?.takeIf { it.contains("#EXTM3U") } ?: return null
 
-        return Csl.rewrite(body, upstream, continent, country) { nested ->
-            HlsProxy.link(resolver = { p -> playlist(p) }, params = mapOf("u" to nested))
-        }
+        val cdnHeaders = mapOf("User-Agent" to ua, "Referer" to "$origin/", "Origin" to origin)
+        return Csl.rewrite(
+            playlist = body,
+            base = upstream,
+            continent = continent,
+            country = country,
+            nested = { url ->
+                LocalProxy.playlist(
+                    source = { p -> playlist(p) },
+                    params = mapOf("u" to url, "c" to params["c"].orEmpty()),
+                    forCast = isCasting
+                )
+            },
+            segment = { url -> if (isCasting) LocalProxy.raw(url, cdnHeaders, true) else url }
+        )
     }
 
     // ============= VOCI =============

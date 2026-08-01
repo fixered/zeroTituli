@@ -1,14 +1,7 @@
 package it.zeroTituli
 
 import android.util.Base64
-import kotlinx.coroutines.runBlocking
-import java.io.BufferedInputStream
-import java.io.OutputStream
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
-import java.net.URLDecoder
-import java.net.URLEncoder
+import it.zeroTituli.shared.M3u8
 
 /**
  * Riscrittura delle playlist HLS di FCTV33.
@@ -17,7 +10,7 @@ import java.net.URLEncoder
  * verso se stesso, in ciclo. Ogni riga porta però i parametri `_ctump` (elenco dei mirror, uno per
  * area) e `_ctuph` (percorso firmato), codificati in ROT13 + base64 dopo otto caratteri di
  * riempimento; l'indirizzo vero è mirror + percorso. Sul sito la sostituzione la fa un service
- * worker, qui la fa [HlsProxy].
+ * worker, qui la fa il proxy locale (`it.zeroTituli.shared.LocalProxy`).
  */
 internal object Csl {
 
@@ -92,149 +85,30 @@ internal object Csl {
         }.toMap()
     }
 
-    private fun absolute(line: String, base: String): String = when {
-        line.startsWith("http") -> line
-        line.startsWith("/") -> base.substringBefore("://") + "://" +
-            base.substringAfter("://").substringBefore('/') + line
-        else -> base.substringBeforeLast('/') + "/" + line
-    }
-
     /**
      * @param base indirizzo della playlist, per risolvere le righe relative.
-     * @return la playlist con i segmenti sostituiti dagli indirizzi dei mirror; le playlist
-     *   annidate tornano al proxy, così anche le loro righe vengono riscritte.
+     * @param nested le playlist annidate tornano al proxy, così anche le loro righe vengono
+     *   riscritte.
+     * @param segment indirizzo finale del segmento: in casting passa dal proxy, perché il CDN
+     *   pretende il `Referer` del dominio del player e il Chromecast non lo manda.
+     * @return la playlist con i segmenti sostituiti dagli indirizzi dei mirror.
      */
     fun rewrite(
         playlist: String,
         base: String,
         continent: String,
         country: String,
-        nested: (String) -> String
-    ): String = playlist.lineSequence().map { raw ->
-        val line = raw.trim()
-        if (line.isEmpty() || line.startsWith("#")) return@map raw
-        val url = absolute(line, base)
+        nested: (String) -> String,
+        segment: (String) -> String
+    ): String = M3u8.rewrite(playlist, base) { url ->
         val query = queryOf(url)
         val ctump = query["_ctump"]
         val ctuph = query["_ctuph"]
         if (ctump != null && ctuph != null) {
             val host = mirrorOf(ctump, continent, country)
             val path = decode(ctuph)
-            if (host != null && path != null) return@map "https://$host$path"
+            if (host != null && path != null) return@rewrite segment("https://$host$path")
         }
-        if (url.substringBefore('?').endsWith(".m3u8")) nested(url) else url
-    }.joinToString("\n")
-}
-
-/**
- * Server HTTP su loopback che serve le playlist riscritte da [Csl].
- *
- * Il player deve poter ricaricare la playlist (è una diretta), quindi non basta riscriverla una
- * volta: serve un indirizzo che risponda a ogni ricarica. Il proxy tiene solo la porta e delega la
- * risposta a [Resolver], così l'indirizzo del flusso viene ricalcolato a ogni giro e non scade.
- */
-internal object HlsProxy {
-
-    /** @return corpo della playlist già riscritta, oppure null se non si riesce a comporla. */
-    fun interface Resolver {
-        suspend fun resolve(params: Map<String, String>): String?
-    }
-
-    private const val PATH = "/hls"
-    private const val CONTENT_TYPE = "application/vnd.apple.mpegurl"
-
-    @Volatile private var port = 0
-    @Volatile private var resolver: Resolver? = null
-
-    /** Registra il risolutore e restituisce l'indirizzo locale con i parametri dati. */
-    fun link(resolver: Resolver, params: Map<String, String>): String {
-        this.resolver = resolver
-        val query = params.entries.joinToString("&") { (k, v) ->
-            "$k=" + URLEncoder.encode(v, "UTF-8")
-        }
-        return "http://127.0.0.1:${start()}$PATH?$query"
-    }
-
-    private fun start(): Int {
-        port.takeIf { it != 0 }?.let { return it }
-        synchronized(this) {
-            if (port != 0) return port
-            val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
-            port = server.localPort
-            Thread({ accept(server) }, "fctv33-hls").apply { isDaemon = true }.start()
-            return port
-        }
-    }
-
-    private fun accept(server: ServerSocket) {
-        while (true) {
-            val socket = runCatching { server.accept() }.getOrNull() ?: return
-            Thread({ serve(socket) }, "fctv33-hls-conn").apply { isDaemon = true }.start()
-        }
-    }
-
-    private fun serve(socket: Socket) {
-        socket.use {
-            runCatching {
-                socket.soTimeout = 20_000
-                val input = BufferedInputStream(socket.getInputStream())
-                val request = readRequestLine(input) ?: return
-                drainHeaders(input)
-                val target = request.split(' ').getOrNull(1).orEmpty()
-                if (!target.startsWith("$PATH?")) {
-                    write(socket.getOutputStream(), 404, "text/plain", "not found")
-                    return
-                }
-                val params = target.substringAfter('?').split('&').mapNotNull { part ->
-                    val name = part.substringBefore('=', "")
-                    if (name.isEmpty()) return@mapNotNull null
-                    name to URLDecoder.decode(part.substringAfter('=', ""), "UTF-8")
-                }.toMap()
-                val body = runBlocking { resolver?.resolve(params) }
-                if (body == null) {
-                    write(socket.getOutputStream(), 502, "text/plain", "no playlist")
-                } else {
-                    write(socket.getOutputStream(), 200, CONTENT_TYPE, body)
-                }
-            }
-        }
-    }
-
-    private fun readRequestLine(input: BufferedInputStream): String? {
-        val line = readLine(input)
-        return line?.takeIf { it.isNotBlank() }
-    }
-
-    private fun drainHeaders(input: BufferedInputStream) {
-        while (true) {
-            val line = readLine(input) ?: return
-            if (line.isEmpty()) return
-        }
-    }
-
-    private fun readLine(input: BufferedInputStream): String? {
-        val out = StringBuilder()
-        while (true) {
-            val b = input.read()
-            if (b == -1) return if (out.isEmpty()) null else out.toString()
-            if (b == '\n'.code) return out.toString().removeSuffix("\r")
-            out.append(b.toChar())
-            if (out.length > 8192) return out.toString()
-        }
-    }
-
-    private fun write(output: OutputStream, status: Int, type: String, body: String) {
-        val bytes = body.toByteArray(Charsets.UTF_8)
-        val head = buildString {
-            append("HTTP/1.1 $status ${if (status == 200) "OK" else "Error"}\r\n")
-            append("Content-Type: $type\r\n")
-            append("Content-Length: ${bytes.size}\r\n")
-            append("Cache-Control: no-cache\r\n")
-            append("Access-Control-Allow-Origin: *\r\n")
-            append("Connection: close\r\n\r\n")
-        }
-        output.write(head.toByteArray(Charsets.US_ASCII))
-        output.write(bytes)
-        output.flush()
+        if (url.substringBefore('?').endsWith(".m3u8")) nested(url) else segment(url)
     }
 }

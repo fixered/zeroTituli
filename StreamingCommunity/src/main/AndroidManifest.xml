@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Il namespace lo imposta build.gradle.kts alla radice: qui l'attributo `package` non è più
+     ammesso da AGP 8. Gli altri moduli non hanno risorse, quindi il loro manifest non viene letto. -->
+<manifest />
