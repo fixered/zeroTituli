@@ -1,0 +1,13 @@
+<smil xmlns="http://www.w3.org/2005/SMIL21/Language">
+	<head>
+	</head>
+	<body>
+	<seq>
+		<ref src="https://vod06-mediaset-it.akamaized.net/cortesia/GEOLOCK-DEF_2.mp4" title="Invalid Token" abstract="This content requires a valid, unexpired auth token.">
+			<param name="isException" value="true"/>
+			<param name="exception" value="InvalidAuthToken"/>
+			<param name="responseCode" value="403"/>
+		</ref>
+	</seq>
+	</body>
+</smil>

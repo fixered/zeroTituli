@@ -1,0 +1,9 @@
+<smil xmlns="http://www.w3.org/2005/SMIL21/Language">
+	<head>
+	</head>
+	<body>
+	<seq>
+		<video src="https://vod06.msf.cdn.mediaset.net/farmunica/2019/04/373226_16a43b7422a89c/dashrcenc/hr_wv_mpl.mpd" title="Stream" type="application/dash+xml"></video>
+	</seq>
+	</body>
+</smil>
