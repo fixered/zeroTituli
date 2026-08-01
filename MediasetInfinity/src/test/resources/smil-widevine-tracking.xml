@@ -1,0 +1,20 @@
+<smil xmlns="http://www.w3.org/2005/SMIL21/Language">
+<head>
+	<meta name="title" content="Ep. 10 - Quello che abbiamo nascosto"/>
+</head>
+<body>
+<seq>
+<par>
+<switch>
+	<video src="https://vod06.msf.cdn.mediaset.net/farmunica/2026/07/2512199_19f8feeda01d01/dashrcenc/hr_wv_mpl.mpd" system-bitrate="0"/>
+	<ref src="https://vod06.msf.cdn.mediaset.net/farmunica/2026/07/2512199_19f8feeda01d01/dashrcenc/hr_wv_mpl.mpd" title="adv:01" dur="2400012ms" guid="F310717301001004" categories="visibility:visibility:FrontEndVisible,category:category:Serie TV,mediasetPlayCategory:mediasetPlayCategory:mediasetPlayCategory/Fiction,editorialLabelBe:editorialLabelBe:Prima Serata,editorialLabelBe:editorialLabelBe:In Onda,editorialLabelBe:editorialLabelBe:Top,primaryGenre:primaryGenre:Drammatico,esgEnabled:esgEnabled:N" type="application/dash+xml" clipBegin="0:00" clipEnd="39:39.019" security="commonEncryption">
+		<param name="autoPlayPoint" value="2379.019"/>
+		<param name="fcode" value="F310717301001004"/>
+		<param name="trackingData" value="aid=2702976343|b=0|bc=FINC-MSIT|cc=IT|ci=1|cid=2636472389450|d=1785619516701|l=2400012|mediaPid=Kk3NxdxEdjLA|pd=1784836636000|pgid=F310717301001004|pid=96DDt7fMRkTc|rc=MO|rid=2636508229404|rnid=111258909|srid=SE000000000661|uids=mediaset-prod/anonymous"/>
+	</ref>
+</switch>
+	<imagestream src="https://static2.mediasetplay.mediaset.it/Mediaset_Italia_Production_-_Main/farmUnicaAssetRepo/19f8feeda01d01.fs" width="0" height="0" type="application/filmstrip+json"/>
+</par>
+</seq>
+</body>
+</smil>

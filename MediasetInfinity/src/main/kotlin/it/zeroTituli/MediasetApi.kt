@@ -151,10 +151,17 @@ class MediasetApi(private val clock: () -> Long = { System.currentTimeMillis() }
             when (val result = MediasetSmil.read(payload)) {
                 is SmilResult.Stream -> {
                     if (result.kind != StreamKind.DASH) return@forEach
-                    // La barra finale, se c'è, va tolta prima: `substringAfterLast` su un
-                    // indirizzo che finisce con `/` restituisce la stringa vuota, e la
-                    // licenza partirebbe senza `releasePid`.
-                    val pid = mediaUrl.trimEnd('/').substringAfterLast('/')
+                    // Il pid della release, letto dal SMIL. Prima si usava l'ultimo pezzo
+                    // dell'indirizzo del mediaSelector, che è il pid del **media**: sono
+                    // due identificativi diversi, e con quello sbagliato il player
+                    // rispondeva `ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED`. Il ripiego
+                    // resta per non restare senza niente se `trackingData` sparisse, ma è
+                    // il caso che non funzionava: se scatta, la licenza va comunque a vuoto.
+                    //
+                    // La barra finale va tolta prima: `substringAfterLast` su un indirizzo
+                    // che finisce con `/` restituisce la stringa vuota.
+                    val pid = result.releasePid
+                        ?: mediaUrl.trimEnd('/').substringAfterLast('/')
                     return VodResult.Ok(
                         VodStream(
                             manifest = result.url,

@@ -282,6 +282,12 @@ class MediasetUrlsTest {
         assertTrue(url.contains("formats=mpeg-dash"))
         assertTrue(url.contains("assetTypes=HR%2Cwidevine%2CgeoIT%7CgeoNo"))
         assertTrue(url.contains("auth=abc.def"))
+        // `tracking=true` è portante e non una preferenza: con `false` theplatform omette
+        // il parametro `trackingData`, dove sta il pid della release che la licenza
+        // Widevine pretende, e ogni episodio muore con
+        // ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED. Rimetterlo a `false` per "chiedere
+        // meno dati" è un errore che compila: qui si accorge.
+        assertTrue("il SMIL del VOD deve chiedere tracking=true", url.contains("tracking=true"))
     }
 
     @Test

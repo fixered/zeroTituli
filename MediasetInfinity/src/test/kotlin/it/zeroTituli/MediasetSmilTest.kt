@@ -129,4 +129,49 @@ class MediasetSmilTest {
             """<smil><body><seq><ref src="http://link.theplatform.eu/s/errorFiles/Unavailable.flv"/></ref></seq></body></smil>"""
         assertEquals(SmilResult.NoMatch, MediasetSmil.read(smil))
     }
+
+    // ============= IL PID DELLA RELEASE (la licenza Widevine) =============
+
+    @Test
+    fun `prende il pid della release e non quello del media`() {
+        // Campione vero, con i due pid che il SMIL porta insieme:
+        //   mediaPid=Kk3NxdxEdjLA   (l'ultimo pezzo dell'indirizzo del mediaSelector)
+        //   pid=96DDt7fMRkTc        (quello che la licenza vuole)
+        // Chiedere la licenza col primo dà ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED, che
+        // è esattamente come il guasto si è manifestato sul dispositivo.
+        val result = MediasetSmil.read(fixture("smil-widevine-tracking.xml"))
+        assertTrue(result is SmilResult.Stream)
+        result as SmilResult.Stream
+        assertEquals("96DDt7fMRkTc", result.releasePid)
+        assertEquals(StreamKind.DASH, result.kind)
+    }
+
+    @Test
+    fun `mediaPid non viene confuso col pid`() {
+        // `mediaPid` finisce anch'essa per `pid`: se il confronto fosse per suffisso
+        // invece che per chiave intera, tornerebbe l'identificativo sbagliato — e sarebbe
+        // di nuovo il bug, con i test verdi.
+        val smil = """
+            <smil><body><seq><ref src="https://cdn/x/hr_wv_mpl.mpd">
+            <param name="trackingData" value="aid=2702976343|mediaPid=SBAGLIATO|pid=GIUSTO|rc=MO"/>
+            </ref></seq></body></smil>
+        """.trimIndent()
+        assertEquals("GIUSTO", (MediasetSmil.read(smil) as SmilResult.Stream).releasePid)
+    }
+
+    @Test
+    fun `senza trackingData il pid della release e nullo`() {
+        val smil = """<smil><body><seq><video src="https://cdn/x/hr_wv_mpl.mpd"/></seq></body></smil>"""
+        assertEquals(null, (MediasetSmil.read(smil) as SmilResult.Stream).releasePid)
+    }
+
+    @Test
+    fun `un pid vuoto vale come assente`() {
+        val smil = """
+            <smil><body><seq><ref src="https://cdn/x/hr_wv_mpl.mpd">
+            <param name="trackingData" value="aid=1|pid=|rc=MO"/>
+            </ref></seq></body></smil>
+        """.trimIndent()
+        assertEquals(null, (MediasetSmil.read(smil) as SmilResult.Stream).releasePid)
+    }
 }

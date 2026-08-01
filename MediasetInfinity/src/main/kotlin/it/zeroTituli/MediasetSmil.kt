@@ -3,7 +3,18 @@ package it.zeroTituli
 enum class StreamKind { DASH, HLS, PROGRESSIVE }
 
 sealed class SmilResult {
-    data class Stream(val url: String, val kind: StreamKind) : SmilResult()
+    /**
+     * @param releasePid il pid della **release**, letto da `trackingData`. Non è il pid del
+     *   media che sta nell'indirizzo del mediaSelector: sono due identificativi diversi
+     *   (`mediaPid=Kk3NxdxEdjLA|…|pid=96DDt7fMRkTc`) e la licenza Widevine vuole il
+     *   secondo. Chiedendola col primo il player fallisce con
+     *   `ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED`, che è come si è scoperto.
+     */
+    data class Stream(
+        val url: String,
+        val kind: StreamKind,
+        val releasePid: String? = null,
+    ) : SmilResult()
 
     /** `assetTypes` o `formats` non combaciano con nessuna copia disponibile. */
     object NoMatch : SmilResult()
@@ -31,6 +42,7 @@ object MediasetSmil {
 
     private val src = Regex("""<(?:video|ref)[^>]*\bsrc="([^"]+)"""", RegexOption.IGNORE_CASE)
     private val exception = Regex("""name="exception"\s+value="([^"]*)"""", RegexOption.IGNORE_CASE)
+    private val tracking = Regex("""name="trackingData"\s+value="([^"]*)"""", RegexOption.IGNORE_CASE)
 
     fun read(payload: String): SmilResult {
         if (payload.isBlank()) return SmilResult.Failed("risposta vuota")
@@ -81,6 +93,23 @@ object MediasetSmil {
             path.endsWith(".m3u8") -> StreamKind.HLS
             else -> StreamKind.PROGRESSIVE
         }
-        return SmilResult.Stream(url, kind)
+        return SmilResult.Stream(url, kind, releasePid(payload))
     }
+
+    /**
+     * Il pid della release, dentro `trackingData` fra campi separati da `|`.
+     *
+     * La chiave si confronta per intero: `mediaPid` finisce anch'essa per `pid` e
+     * prenderla per errore è esattamente lo scambio che rompe la licenza.
+     */
+    private fun releasePid(payload: String): String? =
+        tracking.find(payload)?.groupValues?.get(1)
+            ?.split('|')
+            ?.firstNotNullOfOrNull { field ->
+                if (field.substringBefore('=').trim() == "pid") {
+                    field.substringAfter('=').trim().takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+            }
 }

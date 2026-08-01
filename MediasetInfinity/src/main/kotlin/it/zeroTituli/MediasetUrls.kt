@@ -248,7 +248,10 @@ object MediasetUrls {
             "formats" to formats,
             "assetTypes" to assetTypes,
             "auto" to "true",
-            "tracking" to "false",
+            // `true` non per farsi contare, ma perché con `false` theplatform omette il
+            // parametro `trackingData`, che è l'unico posto dove sta il pid della release
+            // che la licenza Widevine pretende.
+            "tracking" to "true",
             "auth" to token,
         )
     )
@@ -262,6 +265,9 @@ object MediasetUrls {
         mapOf(
             "format" to "SMIL",
             "formats" to "mpeg-dash",
+            // Qui `false`, al contrario del VOD: la diretta è in chiaro, non c'è licenza da
+            // chiedere e quindi nessun pid da leggere in `trackingData`. Chiederlo sarebbe
+            // solo payload in più e un conteggio in più a carico di Mediaset.
             "tracking" to "false",
         )
     )
