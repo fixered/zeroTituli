@@ -314,4 +314,34 @@ class MediasetKeysTest {
             keys
         )
     }
+
+    // ============= IL PREFISSO DI fixUrl =============
+
+    @Test
+    fun `un data col sito davanti torna a essere una chiave di flusso`() {
+        // È il guasto vero visto sul telefono: `newEpisode` passa il `data` per `fixUrl`,
+        // che a `vod:F310717301001004` mette davanti `mainUrl`. Il valore qui sotto è
+        // quello letto dalla diagnostica sul dispositivo, non inventato.
+        val site = "https://mediasetinfinity.mediaset.it"
+        val prefissato = "$site/vod:F310717301001004"
+
+        assertEquals(null, MediasetKeys.data(prefissato))
+        assertEquals(
+            MediasetKeys.Data.Vod("F310717301001004"),
+            MediasetKeys.data(MediasetKeys.strip(prefissato, site))
+        )
+    }
+
+    @Test
+    fun `il sito davanti non disturba una chiave di flusso pulita`() {
+        val site = "https://mediasetinfinity.mediaset.it"
+        assertEquals(
+            MediasetKeys.Data.Vod("F310717301001004"),
+            MediasetKeys.data(MediasetKeys.strip("vod:F310717301001004", site))
+        )
+        assertEquals(
+            MediasetKeys.Data.Live("C5"),
+            MediasetKeys.data(MediasetKeys.strip("live:C5", site))
+        )
+    }
 }

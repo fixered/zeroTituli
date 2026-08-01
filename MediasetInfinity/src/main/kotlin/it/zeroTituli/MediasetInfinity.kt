@@ -185,14 +185,28 @@ class MediasetInfinity : MainAPI() {
 
         val slots = MediasetSeasons.arrange(entries)
         val episodes = slots.map { slot ->
-            newEpisode(MediasetKeys.vod(slot.entry.guid.orEmpty())) {
-                this.name = slot.entry.title
-                this.season = slot.season
-                this.episode = slot.episode
-                this.description = slot.entry.plot
-                this.posterUrl = MediasetImages.still(slot.entry)
-                this.runTime = slot.entry.durationMinutes
-            }
+            // `fix = false` è obbligatorio, ed è la stessa trappola delle
+            // `new*SearchResponse`: `newEpisode` passa il `data` per `fixUrl`, che a una
+            // stringa senza `http` mette davanti `mainUrl`. La chiave `vod:F310…` arrivava
+            // a `loadLinks` come `https://mediasetinfinity.mediaset.it/vod:F310…`, non
+            // veniva riconosciuta, e ogni episodio diceva "nessun link trovato" — mentre
+            // film e dirette, che non passano da qui, funzionavano.
+            //
+            // Va scritto in forma esplicita: con la lambda in coda Kotlin scioglie la
+            // chiamata sull'overload generico `newEpisode(data, initializer)`, dove `fix`
+            // non si può passare e resta al suo default.
+            newEpisode(
+                url = MediasetKeys.vod(slot.entry.guid.orEmpty()),
+                initializer = {
+                    this.name = slot.entry.title
+                    this.season = slot.season
+                    this.episode = slot.episode
+                    this.description = slot.entry.plot
+                    this.posterUrl = MediasetImages.still(slot.entry)
+                    this.runTime = slot.entry.durationMinutes
+                },
+                fix = false,
+            )
         }
 
         val recommended = recommendationsFor(head)
@@ -295,8 +309,12 @@ class MediasetInfinity : MainAPI() {
         // "nessun link trovato" è il messaggio unico di sei cause diverse più ogni
         // errore a runtime: dal telefono non si distingue niente. Qui la causa vera
         // viene messa nel nome di una sorgente, che nell'elenco si legge senza `adb`.
+        // `strip` come in `load`, e non per simmetria: CloudStream conserva il `data` degli
+        // episodi (ripresa della visione, download), quindi gli episodi salvati da una
+        // versione che passava per `fixUrl` portano ancora il prefisso del sito. Senza
+        // spogliarlo qui, resterebbero rotti anche dopo la correzione a monte.
         return runCatching {
-            when (val key = MediasetKeys.data(data)) {
+            when (val key = MediasetKeys.data(MediasetKeys.strip(data, mainUrl))) {
                 is MediasetKeys.Data.Live -> liveLink(key.callSign, callback)
                 is MediasetKeys.Data.Vod -> vodLink(key.guid, isCasting, callback)
                 null -> {
@@ -315,18 +333,23 @@ class MediasetInfinity : MainAPI() {
     }
 
     /**
-     * DIAGNOSTICA TEMPORANEA: una sorgente finta il cui **nome** è il motivo del guasto.
+     * Il motivo per cui non c'è niente da guardare, scritto dove si legge.
      *
-     * Va letta, non premuta: l'indirizzo non esiste, quindi premendola il player risponde
-     * `ERROR_CODE_IO_BAD_HTTP_STATUS`, che è un errore mio e non dice niente. Il motivo sta
-     * all'inizio del nome perché nell'elenco lo spazio è poco e la coda viene troncata.
+     * `APIRepository.loadLinks` cattura qualunque `Throwable` e torna `false`, quindi
+     * fuori area, sessione scaduta, abbonamento e contenuto assente diventano tutti lo
+     * stesso "nessun link trovato". Una voce nell'elenco delle sorgenti, col motivo come
+     * nome, è il solo posto in cui la differenza arriva a chi guarda.
+     *
+     * Non è riproducibile — l'indirizzo non esiste — e premendola il player risponde
+     * `ERROR_CODE_IO_BAD_HTTP_STATUS`. Il compromesso è voluto: un messaggio che si legge
+     * vale più di un elenco vuoto. Il prefisso lo dice, così non si prova a premerla.
      */
     private suspend fun report(callback: (ExtractorLink) -> Unit, reason: String) {
         callback(
             newExtractorLink(
-                source = "LEGGI QUI",
-                name = reason,
-                url = "https://mediasetinfinity.mediaset.it/diagnosi.m3u8",
+                source = "Mediaset",
+                name = "Non riproducibile: $reason",
+                url = "https://mediasetinfinity.mediaset.it/motivo.m3u8",
                 type = ExtractorLinkType.M3U8
             ) {
                 this.quality = Qualities.Unknown.value
