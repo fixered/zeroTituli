@@ -123,7 +123,7 @@ object LocalProxy {
         }
     }
 
-    private data class Request(val target: String, val range: String?)
+    private data class Request(val method: String, val target: String, val range: String?)
 
     private fun serve(socket: Socket) {
         socket.use {
@@ -134,6 +134,17 @@ object LocalProxy {
                 val path = request.target.substringBefore('?')
                 val params = parseQuery(request.target.substringAfter('?', ""))
                 val out = socket.getOutputStream()
+
+                // Il receiver del Chromecast è una pagina web, quindi valgono le regole del
+                // browser. I segmenti dei VOD si scaricano a pezzi, con l'header `Range`, che non
+                // è fra quelli ammessi d'ufficio: prima parte una preflight OPTIONS, e se non le
+                // si risponde come si deve le richieste a pezzi non partono mai. Le dirette non
+                // usano i Range, ecco perché passano anche senza tutto questo.
+                if (request.method == "OPTIONS") {
+                    writeHead(out, 204, emptyList())
+                    return
+                }
+
                 when (path) {
                     PATH_DYNAMIC -> serveDynamic(out, params)
                     PATH_HLS -> serveHls(out, params)
@@ -177,15 +188,14 @@ object LocalProxy {
             val status = conn.responseCode
             val stream: InputStream = if (status >= 400) conn.errorStream ?: return@runCatching
             else conn.inputStream
-            val head = StringBuilder()
-            head.append("HTTP/1.1 $status ${if (status < 400) "OK" else "Error"}\r\n")
-            conn.getHeaderField("Content-Type")?.let { head.append("Content-Type: $it\r\n") }
-            conn.getHeaderField("Content-Length")?.let { head.append("Content-Length: $it\r\n") }
-            conn.getHeaderField("Content-Range")?.let { head.append("Content-Range: $it\r\n") }
-            head.append("Accept-Ranges: bytes\r\n")
-            head.append("Access-Control-Allow-Origin: *\r\n")
-            head.append("Connection: close\r\n\r\n")
-            out.write(head.toString().toByteArray(Charsets.US_ASCII))
+
+            val extra = mutableListOf<String>()
+            conn.getHeaderField("Content-Type")?.let { extra += "Content-Type: $it" }
+            conn.getHeaderField("Content-Length")?.let { extra += "Content-Length: $it" }
+            conn.getHeaderField("Content-Range")?.let { extra += "Content-Range: $it" }
+            extra += "Accept-Ranges: bytes"
+
+            writeHead(out, status, extra)
             stream.copyTo(out, 64 * 1024)
             out.flush()
         }
@@ -205,6 +215,10 @@ object LocalProxy {
                 readTimeout = 30_000
                 headers.forEach { (k, v) -> setRequestProperty(k, v) }
                 range?.let { setRequestProperty("Range", it) }
+                // HttpURLConnection chiede gzip da solo e poi decomprime senza dirlo: il
+                // `Content-Length` che rigiriamo sarebbe quello compresso, più corto del corpo che
+                // scriviamo, e il televisore resterebbe ad aspettare byte che non arrivano.
+                setRequestProperty("Accept-Encoding", "identity")
             }
         }.getOrNull()
 
@@ -219,7 +233,9 @@ object LocalProxy {
 
     private fun readRequest(input: BufferedInputStream): Request? {
         val first = readLine(input)?.takeIf { it.isNotBlank() } ?: return null
-        val target = first.split(' ').getOrNull(1).orEmpty()
+        val parts = first.split(' ')
+        val method = parts.getOrNull(0).orEmpty().uppercase()
+        val target = parts.getOrNull(1).orEmpty()
         var range: String? = null
         while (true) {
             val line = readLine(input) ?: break
@@ -228,7 +244,7 @@ object LocalProxy {
                 range = line.substringAfter(':').trim()
             }
         }
-        return Request(target, range)
+        return Request(method, target, range)
     }
 
     private fun readLine(input: BufferedInputStream): String? {
@@ -253,17 +269,39 @@ object LocalProxy {
 
     private fun writeText(out: OutputStream, status: Int, type: String, body: String) {
         val bytes = body.toByteArray(Charsets.UTF_8)
+        writeHead(out, status, listOf("Content-Type: $type", "Content-Length: ${bytes.size}"))
+        out.write(bytes)
+        out.flush()
+    }
+
+    /**
+     * Intestazioni comuni a ogni risposta. `Allow-Headers` è quello che fa passare la preflight
+     * delle richieste con `Range`; `Expose-Headers` è quello che permette al player di leggere il
+     * `Content-Range` della risposta, senza il quale non sa che pezzo ha ricevuto. I CDN veri
+     * mandano entrambi, il proxy deve fare lo stesso.
+     */
+    private fun writeHead(out: OutputStream, status: Int, extra: List<String>) {
         val head = buildString {
-            append("HTTP/1.1 $status ${if (status == 200) "OK" else "Error"}\r\n")
-            append("Content-Type: $type\r\n")
-            append("Content-Length: ${bytes.size}\r\n")
+            append("HTTP/1.1 $status ${reason(status)}\r\n")
+            extra.forEach { append(it).append("\r\n") }
             append("Cache-Control: no-cache\r\n")
             append("Access-Control-Allow-Origin: *\r\n")
+            append("Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n")
+            append("Access-Control-Allow-Headers: Range, Content-Type, Accept, Origin\r\n")
+            append("Access-Control-Max-Age: 86400\r\n")
+            append("Access-Control-Expose-Headers: Content-Length, Content-Range, Content-Type, Accept-Ranges\r\n")
             append("Connection: close\r\n\r\n")
         }
         out.write(head.toByteArray(Charsets.US_ASCII))
-        out.write(bytes)
         out.flush()
+    }
+
+    private fun reason(status: Int): String = when (status) {
+        200 -> "OK"
+        204 -> "No Content"
+        206 -> "Partial Content"
+        404 -> "Not Found"
+        else -> if (status < 400) "OK" else "Error"
     }
 }
 

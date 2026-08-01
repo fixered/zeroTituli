@@ -422,10 +422,10 @@ class StreamingCommunity(
      * e usa il receiver predefinito di Google, quindi `User-Agent`, `Referer` e `Origin`
      * dell'ExtractorLink non arrivano al televisore.
      *
-     * Per i canali diretti (Hattrick, FCTV33) questo è fatale, perché quei CDN il `Referer` lo
-     * pretendono, e infatti lì il proxy locale serve. VixCloud e VixSrc invece autorizzano con un
-     * token dentro l'indirizzo, quindi il link nudo ha buone probabilità di bastare: si offre
-     * prima quello, e il proxy resta come riserva.
+     * Si passa quindi dal proxy locale, che rimette gli header e serve i segmenti al televisore.
+     * Il link nudo resta come seconda voce: VixCloud e VixSrc autorizzano con un token dentro
+     * l'indirizzo, quindi potrebbe bastare da solo, e in quel caso evita di far passare un film
+     * intero dalla banda del telefono. Ma va per secondo, perché è quello non verificato.
      *
      * Le due voci non vanno scelte a mano: se la prima non parte Cloudstream passa da solo alla
      * successiva (`CastHelper.awaitLinks`, su `FAILED` richiama con `index + 1`).
@@ -446,6 +446,6 @@ class StreamingCommunity(
         ) {
             this.quality = link.quality
         }
-        return listOf(link, viaProxy)
+        return listOf(viaProxy, link)
     }
 }
