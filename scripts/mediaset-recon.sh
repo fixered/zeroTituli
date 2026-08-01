@@ -8,6 +8,11 @@
 # Le costanti qui sotto sono ripetute (non importate) di proposito: questo
 # script deve girare anche quando il modulo Kotlin non compila. Vanno tenute
 # identiche, carattere per carattere, a MediasetUrls.kt.
+#
+# Niente `set -o pipefail`: ogni check guarda se il valore estratto dopo la
+# pipe è vuoto, non lo stato d'uscita della pipe stessa, quindi un fallimento
+# a metà pipe si vede comunque come CADUTO. Chi aggiunge un check nuovo e si
+# affida invece allo stato d'uscita della pipe deve aggiungerlo esplicitamente.
 set -u
 
 FEED="https://feed.entertainment.tv.theplatform.eu/f/PR1GhC/mediaset-prod-all-programs-v2"
@@ -77,10 +82,14 @@ else
     fail "playbackCheck non dà mediaSelector per $GUID"
   else
     ok "playbackCheck risponde per $GUID"
+    # auto/tracking replicano esattamente MediasetUrls.smil(): senza,
+    # non sarebbe la stessa richiesta che fa il plugin.
     SMIL=$(curl -sf -m 25 -G "$MEDIA" \
       --data-urlencode 'format=SMIL' \
       --data-urlencode 'formats=mpeg-dash' \
       --data-urlencode 'assetTypes=HR,widevine,geoIT|geoNo' \
+      --data-urlencode 'auto=true' \
+      --data-urlencode 'tracking=false' \
       --data-urlencode "auth=$TOKEN")
     case "$SMIL" in
       *cortesia*|*GEOLOCK*) fail "SMIL: blocco geografico, serve una rete italiana" ;;
@@ -110,7 +119,10 @@ else
 fi
 
 echo "7. Markup delle sezioni"
-if curl -sf -m 30 "$SITE/fiction" | grep -q 'ulCarousel'; then
+# Ancorato al tag <ul>: il selettore del plugin è `ul.ulCarousel`
+# (MediasetSections.kt), quindi una `ulCarousel` sopravvissuta solo altrove
+# nella pagina (CSS, bundle JS, regola Tailwind) non deve dare falso verde.
+if curl -sf -m 30 "$SITE/fiction" | grep -qE '<ul[^>]*class="[^"]*ulCarousel'; then
   ok "le pagine sezione hanno ancora i caroselli nel markup"
 else
   fail "markup delle sezioni cambiato: la home usa il ripiego sul feed per categoria"
