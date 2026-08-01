@@ -1,0 +1,79 @@
+package it.zeroTituli
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class MediasetDTOsTest {
+
+    private fun fixture(name: String): String =
+        javaClass.classLoader!!.getResourceAsStream(name)!!.bufferedReader().readText()
+
+    private val feed: FeedResponse =
+        MediasetJson.parse<FeedResponse>(fixture("feed-entry.json"))!!
+
+    @Test
+    fun `legge le voci del feed`() {
+        assertTrue(feed.entries.isNotEmpty())
+        val e = feed.entries.first()
+        assertNotNull(e.guid)
+        assertNotNull(e.title)
+        assertNotNull(e.brandId)
+    }
+
+    @Test
+    fun `i campi con il dollaro finiscono nelle proprieta giuste`() {
+        val e = feed.entries.first()
+        assertEquals("100001417", e.brandId)
+        assertNotNull(e.brandTitle)
+    }
+
+    @Test
+    fun `i generi arrivano dai tag e dal campo generi`() {
+        val e = feed.entries.first()
+        assertTrue(e.genres.isNotEmpty())
+    }
+
+    @Test
+    fun `la categoria arriva dai tag`() {
+        val e = feed.entries.first()
+        assertTrue(e.categories.contains("Documentari"))
+    }
+
+    @Test
+    fun `la durata passa da secondi a minuti`() {
+        // Il feed dà 3550 secondi: CloudStream vuole i minuti.
+        val e = feed.entries.first()
+        assertEquals(59, e.durationMinutes)
+    }
+
+    @Test
+    fun `la classificazione italiana diventa una eta`() {
+        val e = feed.entries.first()
+        assertEquals("T", e.ageRating)
+    }
+
+    @Test
+    fun `i contenuti con diritto AVOD sono gratuiti`() {
+        assertTrue(feed.entries.first().isFree)
+    }
+
+    @Test
+    fun `l identificativo della serie e l ultimo pezzo del seriesId`() {
+        val e = feed.entries.first()
+        assertEquals("SE000000000780", e.seriesGuid)
+    }
+
+    @Test
+    fun `una risposta non valida non lancia`() {
+        assertEquals(null, MediasetJson.parse<FeedResponse>("non json"))
+    }
+
+    @Test
+    fun `un campo nuovo nel feed non rompe la lettura`() {
+        val json = """{"entries":[{"guid":"X","title":"T","campoNuovo":123}]}"""
+        val r = MediasetJson.parse<FeedResponse>(json)
+        assertEquals("X", r!!.entries.first().guid)
+    }
+}
