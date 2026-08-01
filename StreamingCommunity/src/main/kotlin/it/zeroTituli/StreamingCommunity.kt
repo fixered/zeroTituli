@@ -413,30 +413,39 @@ class StreamingCommunity(
         }
 
         if (found.isEmpty()) return false
-        found.forEach { callback(forCast(it, isCasting)) }
+        found.forEach { link -> forCast(link, isCasting).forEach(callback) }
         return true
     }
 
     /**
      * Cloudstream manda al Chromecast solo l'indirizzo (`CastHelper`: `MediaInfo.Builder(link.url)`)
-     * e usa il receiver predefinito di Google: `User-Agent`, `Referer` e `Origin` non arrivano e il
-     * CDN rifiuta, per cui il televisore carica e poi annulla. In casting il flusso passa dal
-     * proxy locale, così a parlare con il CDN è il telefono.
+     * e usa il receiver predefinito di Google, quindi `User-Agent`, `Referer` e `Origin`
+     * dell'ExtractorLink non arrivano al televisore.
+     *
+     * Per i canali diretti (Hattrick, FCTV33) questo è fatale, perché quei CDN il `Referer` lo
+     * pretendono, e infatti lì il proxy locale serve. VixCloud e VixSrc invece autorizzano con un
+     * token dentro l'indirizzo, quindi il link nudo ha buone probabilità di bastare: si offre
+     * prima quello, e il proxy resta come riserva.
+     *
+     * Le due voci non vanno scelte a mano: se la prima non parte Cloudstream passa da solo alla
+     * successiva (`CastHelper.awaitLinks`, su `FAILED` richiama con `index + 1`).
      */
-    private suspend fun forCast(link: ExtractorLink, isCasting: Boolean): ExtractorLink {
-        if (!isCasting || link.type != ExtractorLinkType.M3U8) return link
+    private suspend fun forCast(link: ExtractorLink, isCasting: Boolean): List<ExtractorLink> {
+        if (!isCasting || link.type != ExtractorLinkType.M3U8) return listOf(link)
+
         val proxied = LocalProxy.hls(
             url = link.url,
             headers = link.headers + mapOf("Referer" to link.referer),
             forCast = true
         )
-        return newExtractorLink(
+        val viaProxy = newExtractorLink(
             source = link.source,
-            name = link.name,
+            name = "${link.name} (proxy)",
             url = proxied,
             type = link.type
         ) {
             this.quality = link.quality
         }
+        return listOf(link, viaProxy)
     }
 }
