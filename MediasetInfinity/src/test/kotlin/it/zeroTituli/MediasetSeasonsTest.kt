@@ -91,4 +91,32 @@ class MediasetSeasonsTest {
     fun `una lista vuota da una lista vuota`() {
         assertTrue(MediasetSeasons.arrange(emptyList()).isEmpty())
     }
+
+    @Test
+    fun `la stagione ordina prima di avere episodio numerato`() {
+        // Caso conflittuale per ordine di confronto: season=2/episode=1 vs season=1/episode=null
+        // Se la stagione viene prima nel comparatore, season-1/null-episode vincerà.
+        // Se hasEpisode viene prima, season-2/episode=1 vincerebbe.
+        // Verifichiamo che la stagione vince: s1unnumbered prima di s2e1.
+        val out = MediasetSeasons.arrange(
+            listOf(
+                ep("s2e1", season = 2, number = 1),
+                ep("s1unnumbered", season = 1),
+            )
+        )
+        assertEquals(listOf("s1unnumbered", "s2e1"), out.map { it.entry.guid })
+        assertEquals(listOf(1, 2), out.map { it.season })
+    }
+
+    @Test
+    fun `dedup per guid con titoli diversi preserva il primo`() {
+        // Due entry con lo stesso guid ma titoli diversi verifica che
+        // distinctBy(guid) mantiene la prima occorrenza.
+        val entry1 = FeedEntry(guid = "same-guid", title = "Titolo Primo")
+        val entry2 = FeedEntry(guid = "same-guid", title = "Titolo Secondo", tvSeasonNumber = 1, tvSeasonEpisodeNumber = 1)
+
+        val out = MediasetSeasons.arrange(listOf(entry1, entry2))
+        assertEquals(1, out.size)
+        assertEquals("Titolo Primo", out.first().entry.title)
+    }
 }
