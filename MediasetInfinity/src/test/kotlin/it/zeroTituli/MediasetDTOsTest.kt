@@ -1,6 +1,7 @@
 package it.zeroTituli
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,6 +37,17 @@ class MediasetDTOsTest {
     }
 
     @Test
+    fun `i generi uniscono le due fonti senza duplicati`() {
+        // Nel campione la prima voce ha "Storia Miti e Religioni" solo in
+        // mediasetprogram$genres e "Documentari" solo nel tag scheme=genre: se genres
+        // leggesse una sola fonte, uno dei due mancherebbe.
+        val e = feed.entries.first()
+        assertTrue(e.genres.contains("Storia Miti e Religioni"))
+        assertTrue(e.genres.contains("Documentari"))
+        assertEquals(e.genres.size, e.genres.distinct().size)
+    }
+
+    @Test
     fun `la categoria arriva dai tag`() {
         val e = feed.entries.first()
         assertTrue(e.categories.contains("Documentari"))
@@ -60,9 +72,43 @@ class MediasetDTOsTest {
     }
 
     @Test
+    fun `senza il diritto AVOD non sono gratuiti`() {
+        val e = FeedEntry(guid = "x", rights = listOf("MediasetPlay_ANY", "SVOD"))
+        assertFalse(e.isFree)
+    }
+
+    @Test
+    fun `senza alcun diritto non sono gratuiti`() {
+        val e = FeedEntry(guid = "x", rights = emptyList())
+        assertFalse(e.isFree)
+    }
+
+    @Test
     fun `l identificativo della serie e l ultimo pezzo del seriesId`() {
         val e = feed.entries.first()
         assertEquals("SE000000000780", e.seriesGuid)
+    }
+
+    @Test
+    fun `il plot usa la longDescription quando c'e`() {
+        val e = FeedEntry(guid = "x", description = "breve", longDescription = "lunga")
+        assertEquals("lunga", e.plot)
+    }
+
+    @Test
+    fun `il plot usa la description quando la longDescription manca`() {
+        // Nel campione la seconda voce ha longDescription assente: è il caso vero che
+        // esercita il ramo di riserva, non solo un fixture inventato a mano.
+        val e = feed.entries[1]
+        assertNotNull(e.description)
+        assertEquals(null, e.longDescription)
+        assertEquals(e.description, e.plot)
+    }
+
+    @Test
+    fun `il plot ignora una longDescription vuota e usa la description`() {
+        val e = FeedEntry(guid = "x", description = "breve", longDescription = "   ")
+        assertEquals("breve", e.plot)
     }
 
     @Test
