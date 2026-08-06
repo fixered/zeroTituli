@@ -1,7 +1,6 @@
-package it.zeroTituli
+package it.zeroTituli.shared
 
 import android.util.Base64
-import it.zeroTituli.shared.M3u8
 
 /**
  * Riscrittura delle playlist HLS di FCTV33.

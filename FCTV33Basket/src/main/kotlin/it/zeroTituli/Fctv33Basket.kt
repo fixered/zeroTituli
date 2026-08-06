@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.utils.*
 import it.zeroTituli.shared.Covers
 import it.zeroTituli.shared.Csl
 import it.zeroTituli.shared.LocalProxy
-import it.zeroTituli.shared.MatchFilter
 import it.zeroTituli.shared.Pb
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -14,16 +13,18 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * FCTV33 (www.fctv33hd.fit).
+ * FCTV33 Basket (www.fctv33hd.fit/it/basketball.html).
  *
- * Il sito è una SPA: partite e flussi arrivano da un'API protobuf aperta. L'm3u8 si ottiene in due
- * richieste (elenco dei canali della partita, poi dettaglio del canale) e passa dal proxy locale
- * che riscrive la playlist. Dettagli e numeri di campo del protobuf:
- * docs/superpowers/specs/2026-07-31-plugin-fctv33-design.md
+ * Stessa API del plugin del calcio, con `sportType=2`: il palinsesto arriva da un protobuf aperto
+ * e l'm3u8 si ottiene in due richieste (canali della partita, poi dettaglio del canale). Qui però
+ * il palinsesto non viene filtrato: le partite dei campionati seguiti (Serie A1, Serie A2, NBA)
+ * finiscono in sezioni proprie, tutto il resto in "Altri eventi".
+ *
+ * Numeri di campo del protobuf: docs/superpowers/specs/2026-07-31-plugin-fctv33-design.md.
  */
-class Fctv33 : MainAPI() {
+class Fctv33Basket : MainAPI() {
     override var mainUrl = "https://www.fctv33hd.fit"
-    override var name = "FCTV33"
+    override var name = "FCTV33 Basket"
     override var lang = "it"
     override val hasMainPage = true
     override val hasChromecastSupport = true
@@ -31,9 +32,13 @@ class Fctv33 : MainAPI() {
 
     private val apiBase = "https://apis-data10.tcxru135mdqf.ru"
     private val logosBase = "https://logos1.tcxru135mdqf.ru"
-    private val footballSportType = 1
+    private val basketSportType = 2
     private val fallbackCountry = "IT"
     private val fallbackContinent = "EU"
+
+    /** Le squadre di basket non hanno logo nell'API: senza bandiera resta il pallone. */
+    private val basketBadge =
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f3c0.svg"
 
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
@@ -49,10 +54,9 @@ class Fctv33 : MainAPI() {
         val timestamp: Long,        // secondi
         val home: String,
         val away: String,
-        val homeLogo: String,
-        val awayLogo: String,
         val league: String,
-        val country: String
+        val country: String,
+        val countryLogo: String
     ) {
         val title: String get() = "$home - $away"
     }
@@ -66,61 +70,46 @@ class Fctv33 : MainAPI() {
 
     // ============= HOME =============
 
+    /**
+     * Le sezioni dei campionati seguiti stanno in cima, "Altri eventi" e "Live Ora" in fondo. Una
+     * partita in corso di un campionato seguito compare due volte, nella sua sezione e in "Live
+     * Ora": è voluto, la sezione dei live serve per arrivarci subito.
+     */
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val matches = fetchMatches()
-
-        val cal = Calendar.getInstance(romeTz).apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val todayStart = cal.timeInMillis / 1000L
-        val tomorrowStart = todayStart + 86400L
-        val dayAfterStart = tomorrowStart + 86400L
         val nowSec = System.currentTimeMillis() / 1000L
-        val liveFrom = nowSec - 10_800L
+        val liveFrom = nowSec - liveWindowSec
 
         val sections = mutableListOf<HomePageList>()
 
-        val live = matches.filter { it.timestamp in liveFrom..nowSec }.sortedByDescending { it.timestamp }
-        if (live.isNotEmpty()) {
-            sections += HomePageList("🔴 Live Ora", live.map { toSearchResponse(it) })
+        val followed = listOf(
+            BasketLeagues.Category.SERIE_A1 to "🇮🇹 Serie A1",
+            BasketLeagues.Category.SERIE_A2 to "🇮🇹 Serie A2",
+            BasketLeagues.Category.NBA to "🏀 NBA"
+        )
+        followed.forEach { (category, title) ->
+            val items = matches.filter { BasketLeagues.of(it.league, it.country) == category }
+            if (items.isNotEmpty()) sections += HomePageList(title, items.map { toSearchResponse(it) })
         }
 
-        val today = matches.filter { it.timestamp in (nowSec + 1L)..(tomorrowStart - 1L) }
-        addBandSections(sections, today, "⏰ Oggi")
-
-        val tomorrow = matches.filter { it.timestamp in tomorrowStart..(dayAfterStart - 1L) }
-        addBandSections(sections, tomorrow, "📅 Domani")
-
-        val others = matches.filter { it.timestamp < liveFrom || it.timestamp >= dayAfterStart }
-            .sortedBy { it.timestamp }
+        val others = matches.filter {
+            BasketLeagues.of(it.league, it.country) == BasketLeagues.Category.OTHER
+        }
         if (others.isNotEmpty()) {
-            sections += HomePageList("🗓 Altre date", others.map { toSearchResponse(it) })
+            sections += HomePageList("📺 Altri eventi", others.map { toSearchResponse(it) })
+        }
+
+        val live = matches.filter { it.timestamp in liveFrom..nowSec }
+            .sortedByDescending { it.timestamp }
+        if (live.isNotEmpty()) {
+            sections += HomePageList("🔴 Live Ora", live.map { toSearchResponse(it) })
         }
 
         return newHomePageResponse(sections, false)
     }
 
-    private fun bandOf(ts: Long): String {
-        val c = Calendar.getInstance(romeTz).apply { timeInMillis = ts * 1000L }
-        return when (c.get(Calendar.HOUR_OF_DAY)) {
-            in 0..11 -> "Mattina"
-            in 12..17 -> "Pomeriggio"
-            else -> "Sera"
-        }
-    }
-
-    private fun addBandSections(out: MutableList<HomePageList>, matches: List<Match>, prefix: String) {
-        val emoji = mapOf("Mattina" to "🌅", "Pomeriggio" to "☀️", "Sera" to "🌙")
-        listOf("Mattina", "Pomeriggio", "Sera").forEach { band ->
-            val items = matches.filter { bandOf(it.timestamp) == band }
-                .sortedBy { it.timestamp }
-                .map { toSearchResponse(it) }
-            if (items.isNotEmpty()) out += HomePageList("$prefix · ${emoji[band]} $band", items)
-        }
-    }
+    /** Una partita di basket dura circa due ore: dopo tre si considera finita. */
+    private val liveWindowSec = 10_800L
 
     override suspend fun search(query: String): List<SearchResponse> {
         val q = query.trim()
@@ -143,9 +132,9 @@ class Fctv33 : MainAPI() {
         val id = matchId(match)
         return newLiveStreamLoadResponse(name = match.title, url = id, dataUrl = id) {
             this.plot = plot
-            this.posterUrl = Covers.matchPoster(match.title, match.league, time, badgesOf(match))
+            this.posterUrl = Covers.eventPoster(match.title, match.league, time, badgeOf(match))
             this.backgroundPosterUrl =
-                Covers.matchBackdrop(match.title, match.league, time, badgesOf(match))
+                Covers.eventBackdrop(match.title, match.league, time, badgeOf(match))
         }
     }
 
@@ -169,14 +158,13 @@ class Fctv33 : MainAPI() {
         matchCache?.let { if (now - matchCacheTime < cacheTtlMs) return it }
 
         val bytes = app.get(
-            "$apiBase/api/match/live?sportType=$footballSportType",
+            "$apiBase/api/match/live?sportType=$basketSportType",
             headers = mapOf("User-Agent" to ua),
             referer = "$mainUrl/"
         ).body.bytes()
 
         val body = Pb.parse(bytes).message(10) ?: return emptyList()
         val parsed = body.messages(1).mapNotNull { parseMatch(it) }
-            .filter { MatchFilter.isInteresting(it.league, it.country, it.home, it.away) }
             .distinctBy { it.id }
             .sortedWith(compareBy({ it.timestamp }, { it.title }))
 
@@ -186,19 +174,21 @@ class Fctv33 : MainAPI() {
     }
 
     /**
-     * Campi: 1 id, 3 orario in ms, 10 campionato (3.2 nome, 80.3.2 paese), 30 squadre
-     * (10.3.2 nome, 10.4 logo).
+     * Campi: 1 id, 3 orario in ms, 10 campionato (3.2 nome, 80.3.2 paese, 80.4 bandiera),
+     * 30 squadre (10.3.2 nome). Nel basket il campo 4 delle squadre non è un url come nel calcio,
+     * quindi i loghi delle squadre non ci sono.
      */
     private fun parseMatch(m: Pb): Match? {
         val id = m.long(1) ?: return null
         val ts = (m.long(3) ?: 0L) / 1000L
         val leagueBlock = m.message(10)
         val league = leagueBlock?.stringAt(3, 2).orEmpty()
-        val country = leagueBlock?.stringAt(80, 3, 2).orEmpty()
+        val countryBlock = leagueBlock?.message(80)
+        val country = countryBlock?.stringAt(3, 2).orEmpty()
+        val countryLogo = fixLogoUrl(countryBlock?.string(4).orEmpty())
 
-        val teamBlocks = m.messages(30).mapNotNull { it.message(10) }
-        val names = teamBlocks.map { it.stringAt(3, 2).orEmpty() }
-        val logos = teamBlocks.map { fixLogoUrl(it.string(4).orEmpty()) }
+        val names = m.messages(30).mapNotNull { it.message(10) }
+            .map { it.stringAt(3, 2).orEmpty() }
         if (names.size < 2 || names[0].isBlank() || names[1].isBlank()) return null
 
         return Match(
@@ -206,10 +196,9 @@ class Fctv33 : MainAPI() {
             timestamp = ts,
             home = names[0],
             away = names[1],
-            homeLogo = logos.getOrElse(0) { "" },
-            awayLogo = logos.getOrElse(1) { "" },
             league = league,
-            country = country
+            country = country,
+            countryLogo = countryLogo
         )
     }
 
@@ -295,7 +284,7 @@ class Fctv33 : MainAPI() {
 
     private suspend fun fetchChannels(matchId: Long): List<Channel> = runCatching {
         val bytes = app.get(
-            "$apiBase/api/match/detail?matchId=$matchId&sportType=$footballSportType&stream=true",
+            "$apiBase/api/match/detail?matchId=$matchId&sportType=$basketSportType&stream=true",
             headers = mapOf("User-Agent" to ua),
             referer = "$mainUrl/"
         ).body.bytes()
@@ -315,7 +304,7 @@ class Fctv33 : MainAPI() {
         val (country, continent) = geo()
         val bytes = app.get(
             "$apiBase/api/stream/detail?streamId=${channel.id}&matchId=$matchId" +
-                "&sportType=$footballSportType&siteType=${channel.siteType}" +
+                "&sportType=$basketSportType&siteType=${channel.siteType}" +
                 "&country=$country&continent=$continent",
             headers = mapOf("User-Agent" to ua),
             referer = "$mainUrl/"
@@ -400,12 +389,12 @@ class Fctv33 : MainAPI() {
             type = TvType.Live,
             fix = false
         ) {
-            this.posterUrl = Covers.matchPoster(m.title, m.league, whenStr, badgesOf(m))
+            this.posterUrl = Covers.eventPoster(m.title, m.league, whenStr, badgeOf(m))
         }
     }
 
-    private fun badgesOf(m: Match): List<String> =
-        listOf(m.homeLogo, m.awayLogo).filter { it.startsWith("http") }
+    private fun badgeOf(m: Match): String =
+        m.countryLogo.takeIf { it.startsWith("http") } ?: basketBadge
 
     /** Nell'id non finiscono url: alcune schermate lo mostrano al posto del nome. */
     private fun matchId(m: Match): String = "${m.id}§${m.title}"

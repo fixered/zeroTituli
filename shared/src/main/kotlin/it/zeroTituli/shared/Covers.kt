@@ -93,6 +93,28 @@ internal object Covers {
         badges: List<String> = emptyList()
     ): String = matchCover(landscape, title, league, whenLabel, badges)
 
+    /**
+     * Copertina per gli sport diversi dal calcio.
+     *
+     * Le tabelle qui dentro sono di squadre di calcio: "Napoli", "Milano" o "Trieste" del basket
+     * pescherebbero lo stemma del club di calcio omonimo, quindi i loghi non si cercano. Si usa
+     * il badge passato dal chiamante (la bandiera del paese della competizione, o un'emoji dello
+     * sport) e i colori escono dalla tavolozza sui nomi delle squadre.
+     */
+    fun eventPoster(
+        title: String,
+        league: String,
+        whenLabel: String,
+        badge: String? = null
+    ): String = eventCover(portrait, title, league, whenLabel, badge)
+
+    fun eventBackdrop(
+        title: String,
+        league: String,
+        whenLabel: String,
+        badge: String? = null
+    ): String = eventCover(landscape, title, league, whenLabel, badge)
+
     /** Vero se la squadra è in tabella, anche per somiglianza: serve a scegliere il logo. */
     fun isKnownTeam(name: String): Boolean = teamKey(name) != null
 
@@ -146,6 +168,23 @@ internal object Covers {
         val nameA = teams.firstOrNull() ?: title
         val nameB = teams.getOrNull(1) ?: league
         return build(l, listOf(badge), pickColors(null, nameA, null, nameB), title, meta)
+    }
+
+    private fun eventCover(
+        l: Layout,
+        title: String,
+        league: String,
+        whenLabel: String,
+        badge: String?
+    ): String {
+        val meta = listOf(whenLabel, shortLeague(league))
+            .filter { it.isNotBlank() }
+            .joinToString(" - ")
+        val teams = splitTeams(title)
+        val nameA = teams.firstOrNull() ?: title
+        val nameB = teams.getOrNull(1) ?: league
+        val logo = badge?.takeIf { it.startsWith("http") } ?: STOCK_BADGE
+        return build(l, listOf(logo), pickColors(null, nameA, null, nameB), title, meta)
     }
 
     private fun channelCover(l: Layout, channelName: String): String {

@@ -1,10 +1,12 @@
-package it.zeroTituli
+package it.zeroTituli.shared
 
 /**
  * Lettore minimale del formato wire dei Protocol Buffers.
  *
  * L'API di FCTV33 risponde in protobuf e lo schema non è pubblico: i numeri di campo sono stati
  * ricavati leggendo i dati (vedi docs/superpowers/specs/2026-07-31-plugin-fctv33-design.md).
+ * Lo stesso lettore serve al plugin del calcio e a quello del basket, che parlano con la
+ * medesima API.
  * Serve solo leggere, quindi bastano i tipi varint e length-delimited; i campi sconosciuti
  * vengono saltati.
  */
