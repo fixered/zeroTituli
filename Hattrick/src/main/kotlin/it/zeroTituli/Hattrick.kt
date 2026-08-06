@@ -5,11 +5,12 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import it.zeroTituli.shared.Covers
 import it.zeroTituli.shared.LocalProxy
-import org.jsoup.Jsoup
+import kotlinx.coroutines.delay
 import org.jsoup.nodes.Element
 import java.util.concurrent.atomic.AtomicBoolean
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Collections
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -24,6 +25,11 @@ class Hattrick : MainAPI() {
 
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
+
+    /** Sito di partenza dei canali "premium", da cui si recuperano quelli con il player morto. */
+    private val daddyLiveUrl = "https://dlhd.st"
+
+    private val retryDelayMs = 400L
 
     private val romeTz: TimeZone = TimeZone.getTimeZone("Europe/Rome")
 
@@ -167,20 +173,30 @@ class Hattrick : MainAPI() {
     ): Boolean {
         val ev = findEvent(data) ?: return false
         val any = AtomicBoolean(false)
+        val unresolved = Collections.synchronizedList(mutableListOf<Channel>())
+
         ev.channels.amap { ch ->
-            val link = runCatching { resolveChannel(ch) }.getOrNull()
-            if (link != null) {
-                callback(forCast(link, isCasting))
-                any.set(true)
-            }
+            // Un canale che salta non deve portarsi dietro gli altri: qui dentro ci sono richieste
+            // di rete e l'apertura della porta del proxy, e tutte e due possono fallire.
+            val emitted = runCatching {
+                val stream = resolveChannel(ch) ?: return@runCatching false
+                callback(link(ch, stream, isCasting) { resolveChannel(ch)?.url })
+                true
+            }.getOrDefault(false)
+            if (emitted) any.set(true) else unresolved += ch
         }
-        // Se nessun canale è risolvibile leggendo l'HTML (player con JS offuscato) si ripiega
-        // sulla WebView: costosa, quindi sequenziale e solo sui primi canali.
+
+        // I player rimasti fuori hanno un controllo del browser che vuole JavaScript (le famiglie
+        // meritend/dynriver chiedono una prova di lavoro e la verificano lato server). La WebView
+        // lo passa, ma costa venti secondi: si prova solo se non è rimasto nient'altro.
         if (!any.get()) {
-            for (ch in ev.channels.take(webViewFallbackChannels)) {
-                val link = runCatching { resolveChannelWithWebView(ch) }.getOrNull()
-                if (link != null) {
-                    callback(forCast(link, isCasting))
+            for (ch in unresolved.take(webViewFallbackChannels)) {
+                val emitted = runCatching {
+                    val stream = resolveChannelWithWebView(ch) ?: return@runCatching false
+                    callback(link(ch, stream, isCasting) { resolveChannelWithWebView(ch)?.url })
+                    true
+                }.getOrDefault(false)
+                if (emitted) {
                     any.set(true)
                     break
                 }
@@ -190,22 +206,59 @@ class Hattrick : MainAPI() {
     }
 
     /**
-     * Cloudstream manda al Chromecast solo l'indirizzo (`CastHelper`: `MediaInfo.Builder(link.url)`)
-     * e usa il receiver predefinito di Google: `User-Agent`, `Referer` e `Origin` restano a terra e
-     * i CDN che li pretendono rispondono con un errore, per cui il televisore carica e poi annulla.
-     * In casting il flusso passa quindi dal proxy locale, che è il telefono a interrogare il CDN.
+     * Il link che finisce nel player.
+     *
+     * Passa sempre dal proxy locale, per tre motivi diversi che qui coincidono. Gli indirizzi di
+     * questi CDN scadono in pochi minuti e il proxy li rinnova senza fermare il flusso, che è la
+     * differenza fra vedere la partita e vedere il primo minuto. Gli header (`User-Agent`,
+     * `Referer`, `Origin`) li mette il proxy, e in casting è l'unico modo perché Cloudstream manda
+     * al televisore solo l'indirizzo (`CastHelper`: `MediaInfo.Builder(link.url)`) e il receiver di
+     * Google non li aggiunge. E i manifest DASH arrivano senza `default_KID`, che il proxy inietta.
      */
-    private suspend fun forCast(link: ExtractorLink, isCasting: Boolean): ExtractorLink {
-        if (!isCasting || link.type != ExtractorLinkType.M3U8) return link
-        val headers = link.headers + mapOf("Referer" to link.referer)
-        val proxied = LocalProxy.hls(link.url, headers, forCast = true)
-        return newExtractorLink(
-            source = link.source,
-            name = link.name,
+    private suspend fun link(
+        ch: Channel,
+        stream: Stream,
+        isCasting: Boolean,
+        refresh: LocalProxy.LiveSource,
+    ): ExtractorLink {
+        val clearKey = stream.clearKey
+        val proxied = LocalProxy.live(
+            key = "${name}:${ch.url}",
+            master = stream.url,
+            headers = streamHeaders(stream),
+            source = refresh,
+            // ClearKey vive nel player del telefono: al Chromecast arriverebbe un flusso cifrato
+            // e nessuna chiave, quindi non vale la pena esporre il proxy sulla rete locale.
+            forCast = isCasting && clearKey == null,
+            maxAgeMs = refreshAgeMs(stream.url),
+            kid = clearKey?.kid,
+        )
+        val label = when {
+            clearKey != null && isCasting -> "${ch.name} · ClearKey (solo sul telefono)"
+            clearKey != null -> "${ch.name} · ClearKey"
+            else -> ch.name
+        }
+        if (clearKey == null) {
+            return newExtractorLink(
+                source = this.name,
+                name = label,
+                url = proxied,
+                type = stream.type,
+            ) {
+                this.quality = Qualities.Unknown.value
+            }
+        }
+        return newDrmExtractorLink(
+            source = this.name,
+            name = label,
             url = proxied,
-            type = link.type
+            type = stream.type,
+            uuid = CLEARKEY_UUID,
         ) {
-            this.quality = link.quality
+            this.kid = HattrickPlayers.hexToBase64Url(clearKey.kid)
+            this.key = HattrickPlayers.hexToBase64Url(clearKey.key)
+            this.kty = "oct"
+            this.quality = Qualities.Unknown.value
         }
     }
 
@@ -247,12 +300,10 @@ class Hattrick : MainAPI() {
         val channels = card.select(".btn-group a[href]").mapNotNull { a ->
             val href = a.attr("href").trim()
             val label = a.text().trim()
-            // I canali "EXT CHROME" incorporano un'estensione del browser: non riproducibili
-            if (href.isBlank() || label.isBlank() ||
-                href.startsWith("chrome-extension:") ||
-                label.contains("EXT CHROME", ignoreCase = true)
-            ) null
-            else Channel(label, resolveRelative(href))
+            // Le voci "EXT CHROME" rimandano a un'estensione del browser, ma l'indirizzo del
+            // flusso e le sue chiavi sono scritti nella pagina: si aprono anche da qui.
+            if (href.isBlank() || label.isBlank() || href.startsWith("chrome-extension:")) null
+            else Channel(cleanChannelName(label), resolveRelative(href))
         }.distinctBy { it.url }
         if (channels.isEmpty()) return emptyList()
 
@@ -295,6 +346,15 @@ class Hattrick : MainAPI() {
 
     private fun cleanLabel(s: String): String =
         s.replace(Regex("""\s+"""), " ").trim().trim('-', '·', '•').trim()
+
+    /**
+     * "Eurosport 1 EXT CHROME 🇮🇹" → "Eurosport 1 🇮🇹". La sigla è un'istruzione per chi guarda
+     * dal browser e nell'elenco dei canali non dice niente.
+     */
+    private fun cleanChannelName(label: String): String =
+        label.replace(Regex("""\s*EXT\s*CHROME\s*""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
 
     private fun extractDayMonth(s: String): String {
         val m = Regex("""(\d{1,2})/(\d{1,2})""").find(s) ?: return ""
@@ -442,28 +502,77 @@ class Hattrick : MainAPI() {
 
     // ============= STREAM RESOLVERS =============
     //
-    // Le pagine canale (.htm) incorporano un player di terze parti che cambia nome dominio
-    // spesso. Invece di una whitelist di host si segue la catena di iframe e si prova a
-    // estrarre lo stream a ogni livello; gli unici casi speciali sono i player che
-    // espongono lo stream via API JSON invece che nell'HTML.
+    // Le pagine canale (.htm) incorporano un player di terze parti che cambia nome dominio spesso.
+    // Invece di una lista di host si segue la catena di iframe e si prova a estrarre lo stream a
+    // ogni livello (i modi in cui lo nascondono stanno in HattrickPlayers). I casi che la catena
+    // sola non copre sono quattro, e sono le quattro strade in più di qui sotto:
+    //
+    //  - player che rispondono via API JSON invece che nell'HTML (famiglie damitv.st e nexa.st);
+    //  - pagine "EXT CHROME", che rimandano a un'estensione del browser: nell'iframe c'è
+    //    l'indirizzo vero e in coda le chiavi ClearKey, quindi si aprono anche senza estensione,
+    //    ma solo se le chiavi pubblicate sono ancora quelle del flusso (vedi `verify`);
+    //  - player morti o con il proprio proxy fuori servizio: si ripiega su DaddyLive, quando negli
+    //    indirizzi visti c'è il numero del canale;
+    //  - player dietro un controllo del browser: quelli richiedono la WebView.
 
     private val maxHops = 4
     private val webViewFallbackChannels = 2
     private val webViewTimeoutMs = 20_000L
+    private val pageAttempts = 2
 
+    /** Pagina intermedia già visitata: serve a ricostruire il referer e a cercare l'id DaddyLive. */
     private data class Hop(val url: String, val referer: String)
 
-    private suspend fun resolveChannel(ch: Channel): ExtractorLink? =
-        resolveDeep(ch.url, "$mainUrl/", ch.name, 0)
+    /**
+     * Un flusso pronto da suonare.
+     *
+     * @param referer dominio della pagina dove l'indirizzo è stato trovato: quasi tutti questi CDN
+     *   lo pretendono e senza di lui rispondono 403.
+     */
+    private data class Stream(
+        val url: String,
+        val referer: String,
+        val type: ExtractorLinkType,
+        val clearKey: HattrickPlayers.ClearKey? = null,
+    )
 
     /**
-     * Ultima spiaggia: alcuni player (merithotdog.net, dyncompromise.net, …) costruiscono
-     * l'url dello stream con JS offuscato, illeggibile lato scraping. Si carica la pagina più
-     * interna in una WebView e si intercetta la richiesta della playlist.
+     * Il flusso di un canale, verificato.
+     *
+     * Un indirizzo trovato non è un indirizzo che funziona: la catena può finire su un player il
+     * cui dominio è stato sequestrato, o su un proxy fuori servizio, o su un canale che non è in
+     * onda. Quando la strada normale non porta a niente di suonabile si prova quella di DaddyLive,
+     * dove finiscono quasi tutti questi canali e dove il numero lo abbiamo già visto passare.
      */
-    private suspend fun resolveChannelWithWebView(ch: Channel): ExtractorLink? {
+    private suspend fun resolveChannel(ch: Channel): Stream? {
         val hops = mutableListOf<Hop>()
-        resolveDeep(ch.url, "$mainUrl/", ch.name, 0, hops)?.let { return it }
+        val direct = resolveDeep(ch.url, "$mainUrl/", 0, hops)
+        if (direct != null && verify(direct)) return direct
+
+        val seen = hops.map { it.url } + listOfNotNull(direct?.url)
+        val daddy = resolveDaddy(seen)
+        if (daddy != null && verify(daddy)) return daddy
+        return null
+    }
+
+    private suspend fun resolveDaddy(seen: List<String>): Stream? {
+        val id = HattrickPlayers.daddyId(seen) ?: return null
+        val page = "$daddyLiveUrl/stream/stream-$id.php"
+        if (seen.any { it == page }) return null
+        return resolveDeep(page, "$daddyLiveUrl/", 0)
+    }
+
+    /**
+     * Ultima spiaggia: la pagina più interna finisce in una WebView e si intercetta la richiesta
+     * della playlist. Serve per i player che costruiscono l'indirizzo con JavaScript offuscato e
+     * per quelli protetti da un controllo del browser (`meritend.net`, `*.dynriver.net`: prova di
+     * lavoro Cap.js, con verifica lato server di dati che solo un browser vero produce).
+     */
+    private suspend fun resolveChannelWithWebView(ch: Channel): Stream? {
+        // La discesa serve solo ad arrivare all'ultima pagina della catena: quello che
+        // eventualmente trova è già stato scartato da resolveChannel, che verifica.
+        val hops = mutableListOf<Hop>()
+        resolveDeep(ch.url, "$mainUrl/", 0, hops)
         val last = hops.lastOrNull() ?: return null
 
         val intercepted = runCatching {
@@ -474,48 +583,48 @@ class Hattrick : MainAPI() {
             ).resolveUsingWebView(url = last.url, referer = last.referer).first
         }.getOrNull() ?: return null
 
-        return buildStreamLink(ch.name, intercepted.url.toString(), last.url)
+        return streamOf(intercepted.url.toString(), last.url, null)?.takeIf { verify(it) }
     }
 
     private suspend fun resolveDeep(
         url: String,
         referer: String,
-        chName: String,
         depth: Int,
         hops: MutableList<Hop>? = null
-    ): ExtractorLink? {
+    ): Stream? {
         if (depth > maxHops) return null
         if (!url.startsWith("http://") && !url.startsWith("https://")) return null
         hops?.add(Hop(url, referer))
 
-        val html = runCatching {
-            app.get(url, headers = mapOf("User-Agent" to ua), referer = referer).text
-        }.getOrNull() ?: return null
+        val html = fetch(url, referer) ?: return null
 
         // Player con risoluzione via API JSON (famiglia damitv.st / ondemand.st)
         if (html.contains("/papi/tv/resolve/")) {
-            resolvePapiPlayer(url, chName)?.let { return it }
+            resolvePapiPlayer(url)?.let { return it }
         }
 
         // Player che carica l'iframe reale via api/player.php?id=N (famiglia nexa.st)
         if (html.contains("api/player.php?id=")) {
-            resolveJsonHop(url)?.let { return resolveDeep(it, url, chName, depth + 1, hops) }
+            resolveJsonHop(url)?.let { return resolveDeep(it, url, depth + 1, hops) }
         }
 
-        extractStreamUrl(html)?.let { stream ->
-            return buildStreamLink(chName, stream, url)
+        HattrickPlayers.stream(html)?.let { found ->
+            streamOf(normalizeUrl(found.url, url), url, found.clearKey)?.let { return it }
         }
 
-        val next = firstPlayerIframe(html)?.let { normalizeUrl(it, url) } ?: return null
+        val next = HattrickPlayers.playerIframe(html)?.let { normalizeUrl(it, url) } ?: return null
         if (next == url) return null
-        return resolveDeep(next, url, chName, depth + 1, hops)
+        return resolveDeep(next, url, depth + 1, hops)
     }
 
     /**
      * host/embed/channel/?id=CH → host/papi/tv/resolve/CH?t=TOKEN → {"stream":"...m3u8"}
-     * Il token viene da ad-session/ad-verify; se non si ottiene si prova comunque a vuoto.
+     *
+     * Il token viene da ad-session/ad-verify. Non è obbligatorio (l'API risponde anche a mani
+     * vuote) ma costa poco, e quando l'API sbaglia un colpo — capita, è un proxy davanti a
+     * DaddyLive — si riprova, perché rinunciare qui vuol dire perdere il canale.
      */
-    private suspend fun resolvePapiPlayer(embedUrl: String, chName: String): ExtractorLink? {
+    private suspend fun resolvePapiPlayer(embedUrl: String): Stream? {
         val host = hostOf(embedUrl) ?: return null
         val id = Regex("""[?&]id=([^&#]+)""").find(embedUrl)?.groupValues?.getOrNull(1)
             ?: embedUrl.substringBefore('?').trimEnd('/').substringAfterLast('/')
@@ -533,18 +642,18 @@ class Hattrick : MainAPI() {
             Regex(""""t"\s*:\s*"([^"]+)"""").find(verify)?.groupValues?.getOrNull(1).orEmpty()
         }.getOrNull().orEmpty()
 
-        val json = runCatching {
-            app.get(
-                "https://$host/papi/tv/resolve/$id?t=$token",
-                headers = headers,
-                referer = embedUrl
-            ).text
-        }.getOrNull() ?: return null
-
-        val stream = Regex(""""stream"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.getOrNull(1)
-            ?: Regex(""""url"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.getOrNull(1)
-            ?: return null
-        return buildStreamLink(chName, unescapeUrl(stream), embedUrl)
+        repeat(pageAttempts) { attempt ->
+            val json = fetch("https://$host/papi/tv/resolve/$id?t=$token", embedUrl, attempts = 1)
+            val stream = json?.let {
+                Regex(""""stream"\s*:\s*"([^"]+)"""").find(it)?.groupValues?.getOrNull(1)
+                    ?: Regex(""""url"\s*:\s*"([^"]+)"""").find(it)?.groupValues?.getOrNull(1)
+            }
+            if (stream != null) {
+                streamOf(HattrickPlayers.unescape(stream), embedUrl, null)?.let { return it }
+            }
+            if (attempt < pageAttempts - 1) delay(retryDelayMs)
+        }
+        return null
     }
 
     /** page?id=N → page_dir/api/player.php?id=N → {"url":"https://.../embed.php?..."} */
@@ -552,101 +661,92 @@ class Hattrick : MainAPI() {
         val id = Regex("""[?&]id=([^&#]+)""").find(pageUrl)?.groupValues?.getOrNull(1) ?: return null
         val base = pageUrl.substringBefore('?').substringBeforeLast('/', "")
         if (base.isBlank()) return null
-        val json = runCatching {
-            app.get(
-                "$base/api/player.php?id=$id",
-                headers = mapOf("User-Agent" to ua),
-                referer = pageUrl
-            ).text
-        }.getOrNull() ?: return null
+        val json = fetch("$base/api/player.php?id=$id", pageUrl) ?: return null
         val next = Regex(""""url"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.getOrNull(1)
             ?: return null
-        return normalizeUrl(unescapeUrl(next), pageUrl)
-    }
-
-    private fun extractStreamUrl(html: String): String? =
-        extractCharArrayUrl(html)
-            ?: Regex("""streamUrl\s*[:=]\s*["']([^"']+)["']""").find(html)
-                ?.groupValues?.getOrNull(1)?.let { unescapeUrl(it) }
-            ?: Regex(
-                """(?:file|source|src|hlsUrl|playlist)\s*[:=]\s*["']([^"']+\.(?:m3u8|mpd)[^"']*)["']""",
-                RegexOption.IGNORE_CASE
-            ).find(html)?.groupValues?.getOrNull(1)?.let { unescapeUrl(it) }
-            ?: Regex("""https?:(?:\\?/){2}[^"'\s\\<>]+\.(?:m3u8|mpd)[^"'\s\\<>]*""")
-                .find(html)?.value?.let { unescapeUrl(it) }
-
-    /**
-     * Alcuni player costruiscono l'url spezzandolo in un array di caratteri:
-     *   player.load({source: ["h","t","t","p",...].join("") + document.getElementById("x").innerHTML})
-     */
-    private fun extractCharArrayUrl(html: String): String? {
-        val arrayRegex = Regex("""\[\s*((?:"(?:\\.|[^"\\])*"\s*,\s*)+"(?:\\.|[^"\\])*")\s*]\s*\.join\(\s*""\s*\)""")
-        val stringRegex = Regex(""""((?:\\.|[^"\\])*)"""")
-        val tailRegex = Regex("""getElementById\(\s*["']([^"']+)["']\s*\)\s*\.innerHTML""")
-
-        arrayRegex.findAll(html).forEach { m ->
-            val joined = stringRegex.findAll(m.groupValues[1])
-                .joinToString("") { it.groupValues[1] }
-                .let { unescapeUrl(it) }
-            if (!joined.contains(".m3u8") && !joined.contains(".mpd")) return@forEach
-
-            // eventuale coda presa dall'innerHTML di uno span nascosto
-            val tail = tailRegex.find(html.substring(m.range.last + 1).take(300))
-                ?.groupValues?.getOrNull(1)
-                ?.let { id -> runCatching { Jsoup.parse(html).getElementById(id)?.text()?.trim() }.getOrNull() }
-                .orEmpty()
-            return joined + tail
-        }
-        return null
-    }
-
-    private val adIframePatterns = listOf(
-        "/ads/", "/ad/", "adserver", "doubleclick", "300x250", "300v250", "728x90", "banner"
-    )
-
-    private fun firstPlayerIframe(html: String): String? {
-        val iframes = runCatching { Jsoup.parse(html).select("iframe[src]") }.getOrNull().orEmpty()
-        val candidates = iframes.map { it.attr("src").trim() }
-            .filter { it.isNotBlank() && !it.startsWith("about:") && !it.startsWith("chrome-extension:") }
-            .filter { src -> adIframePatterns.none { src.contains(it, ignoreCase = true) } }
-        if (candidates.isEmpty()) return null
-        val fullscreen = iframes.firstOrNull { el ->
-            el.hasAttr("allowfullscreen") && candidates.contains(el.attr("src").trim())
-        }?.attr("src")?.trim()
-        return fullscreen ?: candidates.first()
+        return normalizeUrl(HattrickPlayers.unescape(next), pageUrl)
     }
 
     // ============= HELPERS =============
 
-    private suspend fun buildStreamLink(chName: String, streamUrl: String, pageUrl: String): ExtractorLink? {
-        val clean = unescapeUrl(streamUrl)
+    /**
+     * Una GET, ritentata una volta.
+     *
+     * Questi domini sbagliano un colpo di tanto in tanto (un timeout, un 502 dal proxy davanti al
+     * CDN) e senza il secondo tentativo un canale sano sparisce dall'elenco.
+     */
+    private suspend fun fetch(url: String, referer: String, attempts: Int = pageAttempts): String? {
+        repeat(attempts) { attempt ->
+            val body = runCatching {
+                app.get(url, headers = mapOf("User-Agent" to ua), referer = referer).text
+            }.getOrNull()
+            if (!body.isNullOrBlank()) return body
+            if (attempt < attempts - 1) delay(retryDelayMs)
+        }
+        return null
+    }
+
+    private fun streamOf(
+        url: String,
+        pageUrl: String,
+        clearKey: HattrickPlayers.ClearKey?,
+    ): Stream? {
+        val clean = HattrickPlayers.unescape(url)
         if (!clean.startsWith("http")) return null
         val host = hostOf(pageUrl) ?: return null
-        return buildM3u8Link(chName, clean, "https://$host/")
-    }
-
-    private suspend fun buildM3u8Link(chName: String, streamUrl: String, refererUrl: String): ExtractorLink {
-        val origin = Regex("""https?://[^/]+""").find(refererUrl)?.value ?: refererUrl.trimEnd('/')
-        val linkType =
-            if (streamUrl.substringBefore('?').endsWith(".mpd")) ExtractorLinkType.DASH
+        val type =
+            if (clean.substringBefore('?').endsWith(".mpd")) ExtractorLinkType.DASH
             else ExtractorLinkType.M3U8
-        return newExtractorLink(
-            source = this.name,
-            name = chName,
-            url = streamUrl,
-            type = linkType
-        ) {
-            this.referer = refererUrl
-            this.quality = Qualities.Unknown.value
-            this.headers = mapOf(
-                "User-Agent" to ua,
-                "Origin" to origin
-            )
-        }
+        return Stream(clean, "https://$host/", type, clearKey)
     }
 
-    private fun unescapeUrl(url: String): String =
-        url.replace("\\/", "/").replace("&amp;", "&").trim()
+    /**
+     * Ogni quanto rifare la strada dall'inizio, prima che l'indirizzo scada.
+     *
+     * I gettoni scritti nella query vivono cinque minuti (lovetier ne rinnova uno ogni 300
+     * secondi): rinnovarli a metà strada evita che il player incontri un rifiuto mentre ha ancora
+     * poco buffer da parte. Le firme dentro il percorso valgono ore, e per quelle basta accorgersi
+     * del rifiuto quando arriva.
+     */
+    private fun refreshAgeMs(url: String): Long =
+        if (Regex("""[?&](token|tk|md5|hash|sig|key|auth)=""").containsMatchIn(url)) 150_000L
+        else 900_000L
+
+    private fun streamHeaders(stream: Stream): Map<String, String> = mapOf(
+        "User-Agent" to ua,
+        "Referer" to stream.referer,
+        "Origin" to stream.referer.trimEnd('/'),
+    )
+
+    /**
+     * Controlla che il flusso risponda davvero, prima di offrirlo.
+     *
+     * Per i DASH cifrati controlla anche che la chiave pubblicata sul sito sia quella del flusso:
+     * quelle pagine ripubblicano le chiavi a mano e restano indietro quando il canale le cambia,
+     * e una chiave sbagliata dà un video nero, non un errore leggibile.
+     */
+    private suspend fun verify(stream: Stream): Boolean {
+        val body = fetch(stream.url, stream.referer) ?: return false
+        if (stream.type == ExtractorLinkType.M3U8) return body.contains("#EXTM3U")
+        if (!body.contains("<MPD")) return false
+        val wanted = stream.clearKey?.kid ?: return true
+        val actual = HattrickPlayers.manifestKid(body) ?: contentKid(stream, body) ?: return true
+        return actual == wanted
+    }
+
+    /** L'identificativo di chiave dei segmenti, quando il manifest non lo dichiara. */
+    private suspend fun contentKid(stream: Stream, manifest: String): String? {
+        val path = HattrickPlayers.initPath(manifest) ?: return null
+        val url = normalizeUrl(path, stream.url)
+        val bytes = runCatching {
+            app.get(
+                url,
+                headers = mapOf("User-Agent" to ua),
+                referer = stream.referer
+            ).body.bytes()
+        }.getOrNull() ?: return null
+        return HattrickPlayers.tencKid(bytes)
+    }
 
     private fun hostOf(url: String): String? =
         Regex("""https?://([^/]+)""").find(url)?.groupValues?.getOrNull(1)
