@@ -223,10 +223,18 @@ internal object HattrickPlayers {
             .takeIf { !it.contains('$') }
     }
 
-    /** `cenc:default_KID` del manifest, senza trattini. */
-    fun manifestKid(manifest: String): String? =
-        Regex("""default_KID="([0-9a-fA-F-]{32,36})"""").find(manifest)
-            ?.groupValues?.getOrNull(1)?.replace("-", "")?.lowercase()
+    /**
+     * Tutti i `cenc:default_KID` del manifest, senza trattini.
+     *
+     * Un manifest può dichiararne più di uno — video e audio cifrati con chiavi diverse, o una
+     * chiave per fascia di qualità — e guardare solo il primo faceva scartare un canale le cui
+     * chiavi pubblicate erano invece buone.
+     */
+    fun manifestKids(manifest: String): Set<String> =
+        Regex("""default_KID="([0-9a-fA-F-]{32,36})"""", RegexOption.IGNORE_CASE)
+            .findAll(manifest)
+            .map { it.groupValues[1].replace("-", "").lowercase() }
+            .toSet()
 
     /**
      * Identificativo della chiave dentro la scatola `tenc` del segmento di inizializzazione:

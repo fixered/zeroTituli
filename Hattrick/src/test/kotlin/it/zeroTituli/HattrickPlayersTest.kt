@@ -186,6 +186,29 @@ class HattrickPlayersTest {
         assertNull(HattrickPlayers.initPath(senzaRappresentazione))
     }
 
+    /**
+     * Il manifest può dichiarare più chiavi (video e audio cifrati con chiavi diverse): vanno
+     * raccolte tutte, altrimenti la chiave buona pubblicata sul sito sembra sbagliata.
+     */
+    @Test
+    fun `raccoglie tutti gli identificativi di chiave del manifest`() {
+        val due = manifest.replace(
+            """<ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc" />""",
+            """<ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc" """ +
+                """cenc:default_KID="163303a8-8382-4977-b05d-7357da82f487" />""" +
+                """<ContentProtection cenc:default_KID="EDB40DA832C44957B49A3035DEADBEEF" />"""
+        )
+        assertEquals(
+            setOf("163303a883824977b05d7357da82f487", "edb40da832c44957b49a3035deadbeef"),
+            HattrickPlayers.manifestKids(due)
+        )
+    }
+
+    @Test
+    fun `senza chiavi dichiarate l'insieme e vuoto`() {
+        assertTrue(HattrickPlayers.manifestKids(manifest).isEmpty())
+    }
+
     @Test
     fun `legge l'identificativo di chiave dalla scatola tenc`() {
         val kid = "163303a883824977b05d7357da82f487"

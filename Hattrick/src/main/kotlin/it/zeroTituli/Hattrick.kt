@@ -7,10 +7,8 @@ import it.zeroTituli.shared.Covers
 import it.zeroTituli.shared.LocalProxy
 import kotlinx.coroutines.delay
 import org.jsoup.nodes.Element
-import java.util.concurrent.atomic.AtomicBoolean
 import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Collections
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -172,37 +170,27 @@ class Hattrick : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val ev = findEvent(data) ?: return false
-        val any = AtomicBoolean(false)
-        val unresolved = Collections.synchronizedList(mutableListOf<Channel>())
 
-        ev.channels.amap { ch ->
-            // Un canale che salta non deve portarsi dietro gli altri: qui dentro ci sono richieste
-            // di rete e l'apertura della porta del proxy, e tutte e due possono fallire.
-            val emitted = runCatching {
-                val stream = resolveChannel(ch) ?: return@runCatching false
+        // I player rimasti fuori dalla strada veloce hanno un controllo del browser che vuole
+        // JavaScript (le famiglie meritend/dynriver chiedono una prova di lavoro e la verificano
+        // lato server). La WebView lo passa, ma costa venti secondi: ci passa solo chi è rimasto
+        // fuori, uno alla volta e con un tetto di tempo. Il criterio sta in ChannelFanout.
+        val emitted = ChannelFanout.emitAll(
+            channels = ev.channels,
+            fast = { ch ->
+                val stream = resolveChannel(ch) ?: return@emitAll false
                 callback(link(ch, stream, isCasting) { resolveChannel(ch)?.url })
                 true
-            }.getOrDefault(false)
-            if (emitted) any.set(true) else unresolved += ch
-        }
-
-        // I player rimasti fuori hanno un controllo del browser che vuole JavaScript (le famiglie
-        // meritend/dynriver chiedono una prova di lavoro e la verificano lato server). La WebView
-        // lo passa, ma costa venti secondi: si prova solo se non è rimasto nient'altro.
-        if (!any.get()) {
-            for (ch in unresolved.take(webViewFallbackChannels)) {
-                val emitted = runCatching {
-                    val stream = resolveChannelWithWebView(ch) ?: return@runCatching false
-                    callback(link(ch, stream, isCasting) { resolveChannelWithWebView(ch)?.url })
-                    true
-                }.getOrDefault(false)
-                if (emitted) {
-                    any.set(true)
-                    break
-                }
-            }
-        }
-        return any.get()
+            },
+            slow = { ch ->
+                val stream = resolveChannelWithWebView(ch) ?: return@emitAll false
+                callback(link(ch, stream, isCasting) { resolveChannelWithWebView(ch)?.url })
+                true
+            },
+            slowLimit = webViewFallbackChannels,
+            slowBudgetMs = webViewBudgetMs,
+        )
+        return emitted > 0
     }
 
     /**
@@ -234,6 +222,7 @@ class Hattrick : MainAPI() {
             kid = clearKey?.kid,
         )
         val label = when {
+            stream.staleKey -> "${ch.name} · chiavi del sito scadute"
             clearKey != null && isCasting -> "${ch.name} · ClearKey (solo sul telefono)"
             clearKey != null -> "${ch.name} · ClearKey"
             else -> ch.name
@@ -516,8 +505,11 @@ class Hattrick : MainAPI() {
     //  - player dietro un controllo del browser: quelli richiedono la WebView.
 
     private val maxHops = 4
-    private val webViewFallbackChannels = 2
+    private val webViewFallbackChannels = 3
     private val webViewTimeoutMs = 20_000L
+
+    /** Tetto complessivo per i tentativi con la WebView: oltre, l'attesa non si giustifica. */
+    private val webViewBudgetMs = 45_000L
     private val pageAttempts = 2
 
     /** Pagina intermedia già visitata: serve a ricostruire il referer e a cercare l'id DaddyLive. */
@@ -534,7 +526,20 @@ class Hattrick : MainAPI() {
         val referer: String,
         val type: ExtractorLinkType,
         val clearKey: HattrickPlayers.ClearKey? = null,
+        /** Il flusso risponde ma le chiavi pubblicate dal sito non sono le sue: vedi [Health]. */
+        val staleKey: Boolean = false,
     )
+
+    /**
+     * Cosa si è trovato in fondo alla catena.
+     *
+     * [STALE_KEY] è il caso delle pagine "EXT CHROME": il flusso c'è ed è vivo, ma le chiavi
+     * ClearKey che il sito pubblica accanto all'indirizzo sono di una rotazione precedente (le
+     * ripubblicano a mano e restano indietro). Prima quei canali venivano scartati insieme a
+     * quelli morti e nell'elenco non compariva niente: ora si offrono comunque, con l'avviso nel
+     * nome, perché "non funziona e si vede perché" è meglio di "non c'è".
+     */
+    private enum class Health { PLAYABLE, STALE_KEY, DEAD }
 
     /**
      * Il flusso di un canale, verificato.
@@ -547,12 +552,18 @@ class Hattrick : MainAPI() {
     private suspend fun resolveChannel(ch: Channel): Stream? {
         val hops = mutableListOf<Hop>()
         val direct = resolveDeep(ch.url, "$mainUrl/", 0, hops)
-        if (direct != null && verify(direct)) return direct
+        var stale: Stream? = null
+        if (direct != null) when (health(direct)) {
+            Health.PLAYABLE -> return direct
+            Health.STALE_KEY -> stale = direct.copy(staleKey = true)
+            Health.DEAD -> Unit
+        }
 
         val seen = hops.map { it.url } + listOfNotNull(direct?.url)
         val daddy = resolveDaddy(seen)
-        if (daddy != null && verify(daddy)) return daddy
-        return null
+        if (daddy != null && health(daddy) == Health.PLAYABLE) return daddy
+        // Meglio del niente: il flusso è vivo, le chiavi del sito no.
+        return stale
     }
 
     private suspend fun resolveDaddy(seen: List<String>): Stream? {
@@ -583,7 +594,8 @@ class Hattrick : MainAPI() {
             ).resolveUsingWebView(url = last.url, referer = last.referer).first
         }.getOrNull() ?: return null
 
-        return streamOf(intercepted.url.toString(), last.url, null)?.takeIf { verify(it) }
+        return streamOf(intercepted.url.toString(), last.url, null)
+            ?.takeIf { health(it) == Health.PLAYABLE }
     }
 
     private suspend fun resolveDeep(
@@ -675,10 +687,15 @@ class Hattrick : MainAPI() {
      * Questi domini sbagliano un colpo di tanto in tanto (un timeout, un 502 dal proxy davanti al
      * CDN) e senza il secondo tentativo un canale sano sparisce dall'elenco.
      */
-    private suspend fun fetch(url: String, referer: String, attempts: Int = pageAttempts): String? {
+    private suspend fun fetch(
+        url: String,
+        referer: String,
+        attempts: Int = pageAttempts,
+        headers: Map<String, String> = mapOf("User-Agent" to ua),
+    ): String? {
         repeat(attempts) { attempt ->
             val body = runCatching {
-                app.get(url, headers = mapOf("User-Agent" to ua), referer = referer).text
+                app.get(url, headers = headers, referer = referer).text
             }.getOrNull()
             if (!body.isNullOrBlank()) return body
             if (attempt < attempts - 1) delay(retryDelayMs)
@@ -721,17 +738,28 @@ class Hattrick : MainAPI() {
     /**
      * Controlla che il flusso risponda davvero, prima di offrirlo.
      *
-     * Per i DASH cifrati controlla anche che la chiave pubblicata sul sito sia quella del flusso:
-     * quelle pagine ripubblicano le chiavi a mano e restano indietro quando il canale le cambia,
-     * e una chiave sbagliata dà un video nero, non un errore leggibile.
+     * La richiesta parte con gli stessi header con cui poi il proxy scarica il flusso, `Origin`
+     * compreso: alcuni di questi CDN lo pretendono, e con un header in meno un canale sano
+     * rispondeva 403 e veniva buttato via.
+     *
+     * Per i DASH cifrati controlla anche che la chiave pubblicata sul sito sia una di quelle del
+     * flusso: quelle pagine ripubblicano le chiavi a mano e restano indietro quando il canale le
+     * cambia, e una chiave sbagliata dà un errore di decifratura, non un messaggio leggibile.
      */
-    private suspend fun verify(stream: Stream): Boolean {
-        val body = fetch(stream.url, stream.referer) ?: return false
-        if (stream.type == ExtractorLinkType.M3U8) return body.contains("#EXTM3U")
-        if (!body.contains("<MPD")) return false
-        val wanted = stream.clearKey?.kid ?: return true
-        val actual = HattrickPlayers.manifestKid(body) ?: contentKid(stream, body) ?: return true
-        return actual == wanted
+    private suspend fun health(stream: Stream): Health {
+        val body = fetch(stream.url, stream.referer, headers = streamHeaders(stream))
+            ?: return Health.DEAD
+        if (stream.type == ExtractorLinkType.M3U8) {
+            return if (body.contains("#EXTM3U")) Health.PLAYABLE else Health.DEAD
+        }
+        if (!body.contains("<MPD")) return Health.DEAD
+        val wanted = stream.clearKey?.kid ?: return Health.PLAYABLE
+        val declared = HattrickPlayers.manifestKids(body)
+        val kids = declared.ifEmpty { setOfNotNull(contentKid(stream, body)) }
+        // Manifest che non dichiara chiavi e segmento di inizializzazione illeggibile: non si sa,
+        // e nel dubbio il canale si offre.
+        if (kids.isEmpty()) return Health.PLAYABLE
+        return if (wanted in kids) Health.PLAYABLE else Health.STALE_KEY
     }
 
     /** L'identificativo di chiave dei segmenti, quando il manifest non lo dichiara. */
