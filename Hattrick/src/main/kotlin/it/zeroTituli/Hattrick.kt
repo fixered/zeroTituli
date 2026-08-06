@@ -4,13 +4,11 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import it.zeroTituli.shared.Covers
+import it.zeroTituli.shared.EventTime
 import it.zeroTituli.shared.LocalProxy
 import kotlinx.coroutines.delay
 import org.jsoup.nodes.Element
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 import java.util.TimeZone
 
 class Hattrick : MainAPI() {
@@ -46,10 +44,6 @@ class Hattrick : MainAPI() {
     @Volatile private var cacheTime: Long = 0L
     private val cacheTtlMs = 60_000L
 
-    private val timeFmt by lazy {
-        SimpleDateFormat("HH:mm", Locale.ITALY).apply { timeZone = romeTz }
-    }
-
     private val hhmmRegex = Regex("""\d{1,2}:\d{2}""")
 
     // Canali sempre attivi (card "Canali on Line"): non hanno orario
@@ -60,16 +54,11 @@ class Hattrick : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val events = fetchEvents()
 
-        val cal = Calendar.getInstance(romeTz).apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val todayStart = cal.timeInMillis / 1000L
+        val nowMs = System.currentTimeMillis()
+        val todayStart = EventTime.startOfDay(nowMs, romeTz)
         val tomorrowStart = todayStart + 86400L
         val dayAfterStart = tomorrowStart + 86400L
-        val nowSec = System.currentTimeMillis() / 1000L
+        val nowSec = nowMs / 1000L
         val liveFrom = nowSec - 10_800L
 
         val sections = mutableListOf<HomePageList>()
@@ -462,32 +451,8 @@ class Hattrick : MainAPI() {
         if (ev.league == alwaysOnLeague) Covers.channelBackdrop(ev.title)
         else Covers.matchBackdrop(ev.title, ev.league, formatWhen(ev.timestamp))
 
-    private fun formatWhen(ts: Long): String {
-        if (ts <= 0L) return ""
-        val cal = Calendar.getInstance(romeTz).apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val todayStart = cal.timeInMillis / 1000L
-        val tomorrowStart = todayStart + 86400L
-        val dayAfterStart = tomorrowStart + 86400L
-        val time = timeFmt.format(Date(ts * 1000L))
-        return when {
-            ts < todayStart - 86400L -> {
-                SimpleDateFormat("E d/M HH:mm", Locale.ITALY).apply { timeZone = romeTz }
-                    .format(Date(ts * 1000L))
-            }
-            ts < todayStart -> "Ieri $time"
-            ts < tomorrowStart -> time
-            ts < dayAfterStart -> "Domani $time"
-            else -> {
-                SimpleDateFormat("E d/M HH:mm", Locale.ITALY).apply { timeZone = romeTz }
-                    .format(Date(ts * 1000L))
-            }
-        }
-    }
+    /** Etichetta dell'orario: sta in `shared/EventTime` perché la usano tutte e tre le fonti. */
+    private fun formatWhen(ts: Long): String = EventTime.label(ts, tz = romeTz)
 
     // ============= STREAM RESOLVERS =============
     //

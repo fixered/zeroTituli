@@ -4,13 +4,11 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import it.zeroTituli.shared.Covers
 import it.zeroTituli.shared.Csl
+import it.zeroTituli.shared.EventTime
 import it.zeroTituli.shared.LocalProxy
 import it.zeroTituli.shared.MatchFilter
 import it.zeroTituli.shared.Pb
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 import java.util.TimeZone
 
 /**
@@ -40,10 +38,6 @@ class Fctv33 : MainAPI() {
 
     private val romeTz: TimeZone = TimeZone.getTimeZone("Europe/Rome")
 
-    private val timeFmt by lazy {
-        SimpleDateFormat("HH:mm", Locale.ITALY).apply { timeZone = romeTz }
-    }
-
     data class Match(
         val id: Long,
         val timestamp: Long,        // secondi
@@ -69,16 +63,11 @@ class Fctv33 : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val matches = fetchMatches()
 
-        val cal = Calendar.getInstance(romeTz).apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val todayStart = cal.timeInMillis / 1000L
+        val nowMs = System.currentTimeMillis()
+        val todayStart = EventTime.startOfDay(nowMs, romeTz)
         val tomorrowStart = todayStart + 86400L
         val dayAfterStart = tomorrowStart + 86400L
-        val nowSec = System.currentTimeMillis() / 1000L
+        val nowSec = nowMs / 1000L
         val liveFrom = nowSec - 10_800L
 
         val sections = mutableListOf<HomePageList>()
@@ -418,25 +407,6 @@ class Fctv33 : MainAPI() {
         return matches.firstOrNull { it.title.equals(title, ignoreCase = true) }
     }
 
-    private fun formatWhen(ts: Long): String {
-        if (ts <= 0L) return ""
-        val cal = Calendar.getInstance(romeTz).apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val todayStart = cal.timeInMillis / 1000L
-        val tomorrowStart = todayStart + 86400L
-        val dayAfterStart = tomorrowStart + 86400L
-        val time = timeFmt.format(Date(ts * 1000L))
-        return when {
-            ts < todayStart - 86400L || ts >= dayAfterStart ->
-                SimpleDateFormat("E d/M HH:mm", Locale.ITALY).apply { timeZone = romeTz }
-                    .format(Date(ts * 1000L))
-            ts < todayStart -> "Ieri $time"
-            ts < tomorrowStart -> time
-            else -> "Domani $time"
-        }
-    }
+    /** Etichetta dell'orario: sta in `shared/EventTime` perché la usano tutte e tre le fonti. */
+    private fun formatWhen(ts: Long): String = EventTime.label(ts, tz = romeTz)
 }
