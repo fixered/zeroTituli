@@ -54,14 +54,19 @@ subprojects {
             targetSdk = 35
         }
 
+        // Java 11, non 1.8: gli stub di Cloudstream (`com.lagradost:cloudstream3:pre-release`)
+        // dal 14/09/2026 sono compilati con bersaglio 11, e Kotlin si rifiuta di inlinare
+        // bytecode 11 dentro bytecode 1.8 (`AppUtils.parseJson` e compagnia sono `inline`).
+        // Per il dispositivo non cambia niente: a dexare ci pensa D8, che il bytecode 11 lo
+        // desugara anche per minSdk 21.
         compileOptions {
-            sourceCompatibility = JavaVersion.VERSION_1_8
-            targetCompatibility = JavaVersion.VERSION_1_8
+            sourceCompatibility = JavaVersion.VERSION_11
+            targetCompatibility = JavaVersion.VERSION_11
         }
 
         tasks.withType<KotlinJvmCompile> {
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_1_8) // Required
+                jvmTarget.set(JvmTarget.JVM_11) // deve combaciare con compileOptions
                 freeCompilerArgs.addAll(
                     "-Xno-call-assertions",
                     "-Xno-param-assertions",
