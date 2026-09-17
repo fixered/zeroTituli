@@ -270,4 +270,120 @@ class HattrickPlayersTest {
         assertEquals("ciao", HattrickPlayers.decodeBase64("Y2lhbw"))
         assertNull(HattrickPlayers.decodeBase64("non valido!"))
     }
+
+    // ============= PAGINE CHE SI RICOSTRUISCONO DA SOLE (epiembeds.online) =============
+
+    private val xorArrayPage = """
+        <div id="player" data-id="skysportcalcio-it"></div>
+        <script>(function(){var _gi8=[31,14,23,28,13,26,16,23,161,26,23,26,13,217,218,4,15,226,19,161,14,19,21,198,163,25,13,13,17,12,203,208,208,30,17,26,29,29,215,25,14,23,29,9,15,26,12,26,16,23,215,28,16,215,14,20,208,22,226,26,23,208,12,30,28,14,19,30,208,226,227,28,210,211,204,208,210,200,201,202,207,206,200,200,211,207,208,12,20,10,12,17,16,19,13,28,226,21,28,26,16,214,26,13,215,22,204,14,201,163,196,27,8,17,21,226,10,30,19,217,163,17,21,226,10,30,19,163,218,215,12,30,13,14,17,217,4,31,26,21,30,203,14,19,21,213,13,10,17,30,203,163,25,21,12,163,6,218,6],_xl3=156,_xb5=29,_hc0="",_pf8;
+        for(_pf8=0;_pf8<_gi8.length;_pf8++){_hc0+=String.fromCharCode(((_gi8[_pf8]^_xl3)-_xb5+256)&255);}
+        window.eval(_hc0);})();</script>
+    """.trimIndent()
+
+    @Test
+    fun `ricostruisce il codice della pagina e ne legge la playlist`() {
+        val found = HattrickPlayers.stream(xorArrayPage)
+        assertEquals(
+            "https://epidd.hundxvision.co.uk/main/secure/abc123/1789657726/skysportcalcio-it.m3u8",
+            found?.url
+        )
+        assertEquals("xorarray", found?.family)
+    }
+
+    @Test
+    fun `un elenco di numeri che non nasconde una playlist non produce niente`() {
+        assertNull(
+            HattrickPlayers.xorArrayStream(
+                "var a=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21],b=156,c=29;"
+            )
+        )
+    }
+
+    // ============= INDIRIZZO PASSATO COME PARAMETRO (bradm.ax) =============
+
+    private val paramPage = """
+        <iframe src="https://bradm.ax/build/202606/10/e1c1f29/index.html?mediaUrl=https%3A%2F%2Fepidd.hundxvision.co.uk%2Fmain%2Fsecure%2Fe4c9057%2F1789491150%2Fskysport24-it.m3u8"
+         width="600" height="400" frameBorder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+    """.trimIndent()
+
+    @Test
+    fun `legge la playlist passata in percento a un'altra pagina`() {
+        val found = HattrickPlayers.stream(paramPage)
+        assertEquals(
+            "https://epidd.hundxvision.co.uk/main/secure/e4c9057/1789491150/skysport24-it.m3u8",
+            found?.url
+        )
+        assertEquals("param", found?.family)
+    }
+
+    @Test
+    fun `un parametro che non e una playlist viene lasciato stare`() {
+        assertNull(HattrickPlayers.paramStream("<a href=\"/go?url=https%3A%2F%2Fesempio.it%2Fpagina\">x</a>"))
+    }
+
+    // ============= IFRAME MALSCRITTI =============
+
+    @Test
+    fun `l'iframe con le barre sfuggite viene sciolto`() {
+        assertEquals(
+            "https://apexstreams.cfd/live/stream-462.php",
+            HattrickPlayers.playerIframe(
+                """<iframe src="https:\/\/apexstreams.cfd\/live\/stream-462.php" allowfullscreen></iframe>"""
+            )
+        )
+    }
+
+    @Test
+    fun `l'iframe del riquadro copia-codice non viene seguito`() {
+        assertNull(
+            HattrickPlayers.playerIframe(
+                """<iframe src="${'$'}{src}" width="640" height="360" allowfullscreen></iframe>"""
+            )
+        )
+    }
+
+    // ============= TVNOW247 =============
+
+    private val tvNowPage = """
+        <link rel="modulepreload" crossorigin href="/assets/streamService-8uOPVyle-mu2yzy48.js">
+        <link rel="modulepreload" crossorigin href="/assets/channels-BO0sdlCB-mu2yzy48.js">
+        <div id="root"></div>
+    """.trimIndent()
+
+    @Test
+    fun `trova i file dichiarati dalla pagina del player`() {
+        assertEquals("/assets/channels-BO0sdlCB-mu2yzy48.js", HattrickPlayers.tvNowAsset(tvNowPage, "channels"))
+        assertEquals("/assets/streamService-8uOPVyle-mu2yzy48.js", HattrickPlayers.tvNowAsset(tvNowPage, "streamService"))
+        assertNull(HattrickPlayers.tvNowAsset(tvNowPage, "vendor"))
+    }
+
+    @Test
+    fun `il nome del canale sta in fondo all'indirizzo dell'embed`() {
+        assertEquals("sky-sport-arena-italy", HattrickPlayers.tvNowSlug("https://tvnow247.top/embed/sky-sport-arena-italy/"))
+        assertEquals("sky-sport-f1-italy", HattrickPlayers.tvNowSlug("https://tvnow247.top/embed/sky-sport-f1-italy?x=1"))
+    }
+
+    @Test
+    fun `dal nome del canale si ricava il numero che vuole l'API`() {
+        val js = """{channel_name:"Sky Sport Tennis Italy",channel_id:"576",slug:"sky-sport-tennis-italy",country:"IT"},""" +
+            """{channel_name:"Sky Sport F1 Italy",channel_id:"577",slug:"sky-sport-f1-italy",country:"IT"}"""
+        assertEquals("577", HattrickPlayers.tvNowChannelId(js, "sky-sport-f1-italy"))
+        assertEquals("576", HattrickPlayers.tvNowChannelId(js, "sky-sport-tennis-italy"))
+        assertNull(HattrickPlayers.tvNowChannelId(js, "canale-che-non-c-e"))
+    }
+
+    @Test
+    fun `legge l'indirizzo dell'API dal file del player`() {
+        assertEquals(
+            "https://chat.cfbu247.sbs/api/resolve-dlstream/",
+            HattrickPlayers.tvNowApiBase("""await ra("https://chat.cfbu247.sbs/api/resolve-dlstream/".concat(r),ta)""")
+        )
+    }
+
+    @Test
+    fun `prende il campo giusto dalla risposta dell'API`() {
+        val json = """{"channelId":"577","m3u8":"https://a/b","proxyPlaylistUrl":"https://c/d"}"""
+        assertEquals("https://c/d", HattrickPlayers.jsonString(json, "proxyPlaylistUrl"))
+        assertNull(HattrickPlayers.jsonString(json, "referer"))
+    }
 }

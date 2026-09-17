@@ -31,6 +31,8 @@ internal object HattrickPlayers {
         extensionStream(html)
             ?: charArrayStream(html)
             ?: atobStream(html)
+            ?: xorArrayStream(html)
+            ?: paramStream(html)
             ?: taggedStream(html)
             ?: looseStream(html)
 
@@ -121,6 +123,66 @@ internal object HattrickPlayers {
         return null
     }
 
+    /**
+     * Pagina che costruisce il proprio codice da un elenco di numeri (famiglia `epiembeds.online`):
+     *
+     *     var _gi8=[31,14,23,…],_xl3=156,_xb5=29,_hc0="";
+     *     for(…) _hc0+=String.fromCharCode(((_gi8[i]^_xl3)-_xb5+256)&255);
+     *     window.eval(_hc0);
+     *
+     * I nomi delle variabili cambiano a ogni caricamento, le due costanti no: si leggono dalla
+     * riga stessa. Dentro il codice ricostruito l'indirizzo è in chiaro.
+     */
+    fun xorArrayStream(html: String): Found? {
+        val m = Regex("""=\s*\[\s*((?:\d{1,3}\s*,\s*){20,}\d{1,3})\s*]\s*,\s*\w+\s*=\s*(\d{1,3})\s*,\s*\w+\s*=\s*(\d{1,3})\b""")
+            .find(html) ?: return null
+        val mask = m.groupValues[2].toIntOrNull() ?: return null
+        val shift = m.groupValues[3].toIntOrNull() ?: return null
+        val decoded = buildString {
+            m.groupValues[1].split(',').forEach { part ->
+                val v = part.trim().toIntOrNull() ?: return null
+                append((((v xor mask) - shift + 256) and 255).toChar())
+            }
+        }
+        return looseStream(decoded)?.copy(family = "xorarray")
+    }
+
+    /**
+     * Indirizzo passato a un'altra pagina come parametro, con i due punti e le barre in percento:
+     * `…/index.html?mediaUrl=https%3A%2F%2Fhost%2F…%2Fcanale.m3u8`.
+     *
+     * Va cercato prima di [taggedStream], che di quella riga vedrebbe solo il `src=` dell'iframe e
+     * restituirebbe la pagina del player al posto del flusso.
+     */
+    fun paramStream(html: String): Found? {
+        val m = Regex(
+            """[?&](?:mediaUrl|videoUrl|streamUrl|url|file|src)=(https?%3A%2F%2F[^"'&\s<>]+)""",
+            RegexOption.IGNORE_CASE
+        ).find(html) ?: return null
+        val url = percentDecode(m.groupValues[1])
+        if (!url.startsWith("http")) return null
+        if (!url.substringBefore('?').endsWith(".m3u8") && !url.substringBefore('?').endsWith(".mpd")) return null
+        return Found(unescape(url), null, "param")
+    }
+
+    /** Solo `%XX`: il `+` in questi indirizzi è parte della firma, non uno spazio. */
+    private fun percentDecode(s: String): String {
+        if (!s.contains('%')) return s
+        val out = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            val hex = if (s[i] == '%' && i + 2 < s.length) s.substring(i + 1, i + 3).toIntOrNull(16) else null
+            if (hex != null) {
+                out.append(hex.toChar())
+                i += 3
+            } else {
+                out.append(s[i])
+                i++
+            }
+        }
+        return out.toString()
+    }
+
     /** Indirizzo assegnato a un campo noto del player. */
     fun taggedStream(html: String): Found? {
         Regex("""streamUrl\s*[:=]\s*["']([^"']+)["']""").find(html)
@@ -154,6 +216,9 @@ internal object HattrickPlayers {
             .filter { tag ->
                 val src = iframeSrc(tag)
                 src != null && !src.startsWith("about:") && !src.startsWith("chrome-extension:") &&
+                    // `<iframe src="${src}">` è il riquadro "copia il codice di incorporamento"
+                    // che queste pagine mostrano: l'indirizzo lo riempie il browser, qui è testo.
+                    !src.contains("\${") &&
                     adPatterns.none { src.contains(it, ignoreCase = true) }
             }
             .toList()
@@ -162,9 +227,38 @@ internal object HattrickPlayers {
         return iframeSrc(fullscreen ?: tags.first())
     }
 
+    /** L'indirizzo arriva a volte con le barre scappate (`https:\/\/host\/…`): si sciolgono qui. */
     private fun iframeSrc(tag: String): String? =
         Regex("""\bsrc=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            .find(tag)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+            .find(tag)?.groupValues?.getOrNull(1)?.let { unescape(it) }?.takeIf { it.isNotBlank() }
+
+    // ============= TVNOW247 =============
+    //
+    // Questa famiglia non scrive niente nella pagina: è un'applicazione che si monta a video e
+    // chiede il flusso a una sua API. Della pagina servono tre cose, e stanno tutte nei file che
+    // dichiara: il nome del canale (che è nell'indirizzo), il numero che l'API vuole al posto del
+    // nome (che sta nell'elenco dei canali) e l'indirizzo dell'API (che sta nel file del player).
+
+    /** `https://host/embed/sky-sport-arena-italy/` → `sky-sport-arena-italy`. */
+    fun tvNowSlug(url: String): String? =
+        url.substringBefore('?').trim('/').substringAfterLast('/').takeIf { it.isNotBlank() }
+
+    /** Il file `/assets/<nome>-<impronta>.js` dichiarato dalla pagina: l'impronta cambia a ogni build. */
+    fun tvNowAsset(html: String, name: String): String? =
+        Regex("""/assets/${Regex.escape(name)}-[A-Za-z0-9_-]+\.js""").find(html)?.value
+
+    /** Voci `{channel_name:"…",channel_id:"462",slug:"sky-sport-arena-italy",…}`. */
+    fun tvNowChannelId(js: String, slug: String): String? =
+        Regex("""channel_id\s*:\s*"(\d+)"\s*,\s*slug\s*:\s*"${Regex.escape(slug)}"""")
+            .find(js)?.groupValues?.getOrNull(1)
+
+    /** L'indirizzo dell'API, con la barra finale: al fondo ci va il numero del canale. */
+    fun tvNowApiBase(js: String): String? =
+        Regex("""https?://[A-Za-z0-9.-]+/api/resolve-dlstream/""").find(js)?.value
+
+    /** Il primo campo di testo con quel nome in un JSON piatto. */
+    fun jsonString(json: String, name: String): String? =
+        Regex(""""${Regex.escape(name)}"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.getOrNull(1)
 
     // ============= DADDYLIVE =============
 

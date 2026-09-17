@@ -44,7 +44,8 @@ class Hattrick : MainAPI() {
     @Volatile private var cacheTime: Long = 0L
     private val cacheTtlMs = 60_000L
 
-    private val hhmmRegex = Regex("""\d{1,2}:\d{2}""")
+    /** Elenco canali e file del player di tvnow247, per host: vedi `tvNowAsset`. */
+    private val tvNowAssets = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     // Canali sempre attivi (card "Canali on Line"): non hanno orario
     private val alwaysOnLeague = "Canali 24/7"
@@ -242,11 +243,12 @@ class Hattrick : MainAPI() {
 
     // ============= SCRAPING =============
     //
-    // Struttura home (UI 2026): un unico flusso in ordine di documento
-    //   .date-header      → giorno corrente ("MERCOLEDI 29/07")
-    //   .category-label   → campionato ("CALCIO - AMICHEVOLI -")
+    // Struttura home: un unico flusso in ordine di documento
+    //   giorno            → `.date-header` ("MERCOLEDI 29/07") oppure un `<h2>` con il mese per
+    //                       esteso ("MERCOLEDI 16 SETTEMBRE"): il sito usa l'una o l'altra forma
+    //   .category-label   → campionato ("CALCIO - SERIE C")
     //   .match-card       → partita
-    //       .time-box .ora-txt[data-timestamp]  → orario (o "Elenco Canali" per i canali 24/7)
+    //       .time-box                           → orario, in `.ora-txt` o come testo libero
     //       .teams-box                          → "Casa - Ospite" (+ .score-badge / .vs-txt da scartare)
     //       .btn-group a[href]                  → canali (pagine .htm relative)
 
@@ -260,9 +262,14 @@ class Hattrick : MainAPI() {
         var currentLabel = ""
         val parsed = mutableListOf<Event>()
 
-        doc.select(".date-header, .category-label, .match-card").forEach { el ->
+        doc.select(".date-header, h2, .category-label, .match-card").forEach { el ->
             when {
-                el.hasClass("date-header") -> currentDate = extractDayMonth(el.text())
+                el.hasClass("date-header") -> currentDate = HattrickSchedule.dayMonth(el.text())
+                // Un `<h2>` senza data dentro è un titolo qualunque: il giorno in corso non si
+                // tocca, altrimenti le partite che seguono perderebbero l'orario.
+                el.tagName().equals("h2", ignoreCase = true) ->
+                    HattrickSchedule.dayMonth(el.text()).takeIf { it.isNotBlank() }
+                        ?.let { currentDate = it }
                 el.hasClass("category-label") -> currentLabel = cleanLabel(el.text())
                 else -> parsed += parseCard(el, currentLabel, currentDate)
             }
@@ -286,11 +293,15 @@ class Hattrick : MainAPI() {
         if (channels.isEmpty()) return emptyList()
 
         val ora = card.selectFirst(".ora-txt")
-        val timeText = ora?.text()?.trim().orEmpty()
+        // L'orario sta in `.ora-txt` nella vecchia pagina e come testo libero dentro `.time-box`
+        // in quella di adesso: si prende il primo "hh:mm" che compare, da dove che sia.
+        val timeText = HattrickSchedule.timeOf(
+            ora?.text().orEmpty().ifBlank { card.selectFirst(".time-box")?.text().orEmpty() }
+        )
         val tsAttr = ora?.attr("data-timestamp")?.trim()?.toLongOrNull() ?: 0L
 
         // Card senza orario = elenco canali sempre attivi: un elemento per canale
-        if (!hhmmRegex.matches(timeText)) {
+        if (timeText.isBlank()) {
             return channels.map { ch ->
                 Event(
                     title = ch.name,
@@ -308,7 +319,7 @@ class Hattrick : MainAPI() {
         }.orEmpty()
         if (title.isBlank()) return emptyList()
 
-        val ts = parseDayTimeToTs(dayMonth, timeText).takeIf { it > 0L } ?: tsAttr
+        val ts = HattrickSchedule.timestamp(dayMonth, timeText, romeTz).takeIf { it > 0L } ?: tsAttr
 
         return listOf(
             Event(
@@ -334,11 +345,6 @@ class Hattrick : MainAPI() {
             .replace(Regex("""\s+"""), " ")
             .trim()
 
-    private fun extractDayMonth(s: String): String {
-        val m = Regex("""(\d{1,2})/(\d{1,2})""").find(s) ?: return ""
-        return "${m.groupValues[1]}/${m.groupValues[2]}"
-    }
-
     private fun mergeEvents(events: List<Event>): List<Event> {
         val byKey = LinkedHashMap<String, Event>()
         events.forEach { ev ->
@@ -363,35 +369,6 @@ class Hattrick : MainAPI() {
             .trim()
         val parts = normalized.split(" - ").map { it.trim() }.filter { it.isNotEmpty() }
         return parts.sorted().joinToString("|")
-    }
-
-    /** "29/07" + "20:30" (ora di Roma) → epoch secondi. L'anno viene scelto come il più vicino a oggi. */
-    private fun parseDayTimeToTs(dayMonth: String, timeHHmm: String): Long {
-        if (dayMonth.isBlank() || !hhmmRegex.matches(timeHHmm)) return 0L
-        val dm = Regex("""(\d{1,2})/(\d{1,2})""").find(dayMonth) ?: return 0L
-        val hm = timeHHmm.split(":")
-        val day = dm.groupValues[1].toIntOrNull() ?: return 0L
-        val month = dm.groupValues[2].toIntOrNull() ?: return 0L
-        val hour = hm.getOrNull(0)?.toIntOrNull() ?: return 0L
-        val minute = hm.getOrNull(1)?.toIntOrNull() ?: return 0L
-
-        val nowCal = Calendar.getInstance(romeTz)
-        val nowSec = nowCal.timeInMillis / 1000L
-        var best = 0L
-        listOf(0, -1, 1).forEach { yearShift ->
-            val c = Calendar.getInstance(romeTz).apply {
-                set(Calendar.YEAR, nowCal.get(Calendar.YEAR) + yearShift)
-                set(Calendar.MONTH, month - 1)
-                set(Calendar.DAY_OF_MONTH, day)
-                set(Calendar.HOUR_OF_DAY, hour)
-                set(Calendar.MINUTE, minute)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }
-            val ts = c.timeInMillis / 1000L
-            if (best == 0L || kotlin.math.abs(ts - nowSec) < kotlin.math.abs(best - nowSec)) best = ts
-        }
-        return best
     }
 
     private fun inferSport(text: String): String {
@@ -585,6 +562,11 @@ class Hattrick : MainAPI() {
             resolveJsonHop(url)?.let { return resolveDeep(it, url, depth + 1, hops) }
         }
 
+        // Player che monta l'applicazione a video e chiede il flusso alla sua API (tvnow247)
+        if (html.contains("/assets/channels-")) {
+            resolveTvNowPlayer(url, html)?.let { return it }
+        }
+
         HattrickPlayers.stream(html)?.let { found ->
             streamOf(normalizeUrl(found.url, url), url, found.clearKey)?.let { return it }
         }
@@ -631,6 +613,38 @@ class Hattrick : MainAPI() {
             if (attempt < pageAttempts - 1) delay(retryDelayMs)
         }
         return null
+    }
+
+    /**
+     * host/embed/nome-canale/ → API/resolve-dlstream/NUMERO → {"proxyPlaylistUrl":"…"}
+     *
+     * L'elenco dei canali e l'indirizzo dell'API stanno in due file della pagina, grossi e uguali
+     * per tutti i canali dello stesso sito: si scaricano una volta sola e si tengono da parte.
+     */
+    private suspend fun resolveTvNowPlayer(embedUrl: String, html: String): Stream? {
+        val host = hostOf(embedUrl) ?: return null
+        val slug = HattrickPlayers.tvNowSlug(embedUrl) ?: return null
+
+        val channelsJs = tvNowAsset(host, embedUrl, html, "channels") ?: return null
+        val id = HattrickPlayers.tvNowChannelId(channelsJs, slug) ?: return null
+
+        val playerJs = tvNowAsset(host, embedUrl, html, "streamService") ?: return null
+        val apiBase = HattrickPlayers.tvNowApiBase(playerJs) ?: return null
+
+        val json = fetch("$apiBase$id", embedUrl) ?: return null
+        val url = HattrickPlayers.jsonString(json, "proxyPlaylistUrl")
+            ?: HattrickPlayers.jsonString(json, "m3u8")
+            ?: return null
+        return streamOf(HattrickPlayers.unescape(url), embedUrl, null)
+    }
+
+    /** I due file della pagina tvnow247, tenuti da parte per host: pesano mezzo mega in due. */
+    private suspend fun tvNowAsset(host: String, referer: String, html: String, name: String): String? {
+        tvNowAssets["$host|$name"]?.let { return it }
+        val path = HattrickPlayers.tvNowAsset(html, name) ?: return null
+        val body = fetch("https://$host$path", referer) ?: return null
+        tvNowAssets["$host|$name"] = body
+        return body
     }
 
     /** page?id=N → page_dir/api/player.php?id=N → {"url":"https://.../embed.php?..."} */
@@ -745,6 +759,10 @@ class Hattrick : MainAPI() {
         Regex("""https?://([^/]+)""").find(url)?.groupValues?.getOrNull(1)
 
     private fun normalizeUrl(url: String, base: String): String = when {
+        // `https:///percorso`: il sito scrive l'indirizzo con una variabile vuota al posto
+        // dell'host. Il percorso è suo, quindi si rimette l'host della pagina che lo contiene.
+        url.startsWith("http:///") || url.startsWith("https:///") ->
+            hostOf(base)?.let { "https://$it${url.substringAfter("://")}" } ?: url
         url.startsWith("http://") || url.startsWith("https://") -> url
         url.startsWith("//") -> "https:$url"
         url.startsWith("/") -> (hostOf(base)?.let { "https://$it$url" } ?: url)

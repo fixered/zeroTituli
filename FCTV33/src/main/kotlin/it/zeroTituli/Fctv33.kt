@@ -12,7 +12,7 @@ import java.util.Calendar
 import java.util.TimeZone
 
 /**
- * FCTV33 (www.fctv33hd.fit).
+ * FCTV33 (www.fctv33hd.icu).
  *
  * Il sito è una SPA: partite e flussi arrivano da un'API protobuf aperta. L'm3u8 si ottiene in due
  * richieste (elenco dei canali della partita, poi dettaglio del canale) e passa dal proxy locale
@@ -20,15 +20,15 @@ import java.util.TimeZone
  * docs/superpowers/specs/2026-07-31-plugin-fctv33-design.md
  */
 class Fctv33 : MainAPI() {
-    override var mainUrl = "https://www.fctv33hd.fit"
+    override var mainUrl = "https://www.fctv33hd.icu"
     override var name = "FCTV33"
     override var lang = "it"
     override val hasMainPage = true
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
-    private val apiBase = "https://apis-data10.tcxru135mdqf.ru"
-    private val logosBase = "https://logos1.tcxru135mdqf.ru"
+    private val apiBase = "https://apis-data10.tcllu137fien.ru"
+    private val logosBase = "https://logos1.tcllu137fien.ru"
     private val footballSportType = 1
     private val fallbackCountry = "IT"
     private val fallbackContinent = "EU"
@@ -220,9 +220,9 @@ class Fctv33 : MainAPI() {
      * ROT47. Se la richiesta non riesce si usa la lista cucinata qui, aggiornata a mano.
      */
     private val fallbackPlayerDomains = listOf(
-        "https://jack31eo.mpcourageny9i9zzipper.my",
-        "https://nadia33bc.mp77g69ainei3gx2voxygen.ru",
-        "https://morgan01cg.006hndchurch05g7ifbreathing.sbs"
+        "https://jack29eo.mpgreatestclgczbmiddle.my",
+        "https://nadia59bc.mp77g69ainei3gx2voxygen.ru",
+        "https://morgan33cg.006hndchurch05g7ifbreathing.sbs"
     )
 
     /**
@@ -356,8 +356,12 @@ class Fctv33 : MainAPI() {
             playlistUrl(matchId, Channel(streamId, "", siteType)) ?: return null
         }
         val origin = playerDomains().firstOrNull() ?: mainUrl
+        // La playlist si chiede senza `Referer`: l'host che la serve risponde 403 a qualunque
+        // referer, compreso quello del dominio del player (sul sito la pagina del player è marcata
+        // `no-referrer`). I mirror dei segmenti fanno l'opposto e il referer lo pretendono, perciò
+        // resta negli header del link e in `cdnHeaders`.
         val body = runCatching {
-            app.get(upstream, headers = mapOf("User-Agent" to ua), referer = "$origin/").text
+            app.get(upstream, headers = mapOf("User-Agent" to ua)).text
         }.getOrNull()?.takeIf { it.contains("#EXTM3U") } ?: return null
 
         val cdnHeaders = mapOf("User-Agent" to ua, "Referer" to "$origin/", "Origin" to origin)
