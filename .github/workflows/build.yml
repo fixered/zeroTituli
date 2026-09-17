@@ -37,8 +37,13 @@ jobs:
         with:
           java-version: 17
 
+      # `packages` va forzato: il default dell'azione è "tools platform-tools" e il pacchetto
+      # `tools` non esiste più nel repository di Google (sdkmanager esce con 1). Platform e
+      # build-tools se li scarica Gradle da solo, viste le licenze già accettate qui sopra.
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v2
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       - name: Build Plugins
         run: |
