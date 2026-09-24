@@ -134,12 +134,17 @@ internal object HattrickPlayers {
      * riga stessa. Dentro il codice ricostruito l'indirizzo è in chiaro.
      */
     fun xorArrayStream(html: String): Found? {
-        val m = Regex("""=\s*\[\s*((?:\d{1,3}\s*,\s*){20,}\d{1,3})\s*]\s*,\s*\w+\s*=\s*(\d{1,3})\s*,\s*\w+\s*=\s*(\d{1,3})\b""")
+        // Una classe di caratteri e non `(?:\d{1,3}\s*,\s*){20,}`: la ripetizione di un gruppo, in
+        // java.util.regex, scende di un livello di ricorsione a ogni giro, e sugli array di
+        // migliaia di numeri dei player exmxbxe finiva in StackOverflowError.
+        val m = Regex("""=\s*\[\s*([\d\s,]{40,})]\s*,\s*\w+\s*=\s*(\d{1,3})\s*,\s*\w+\s*=\s*(\d{1,3})\b""")
             .find(html) ?: return null
         val mask = m.groupValues[2].toIntOrNull() ?: return null
         val shift = m.groupValues[3].toIntOrNull() ?: return null
+        val parts = m.groupValues[1].trim().split(',')
+        if (parts.size < 21) return null
         val decoded = buildString {
-            m.groupValues[1].split(',').forEach { part ->
+            parts.forEach { part ->
                 val v = part.trim().toIntOrNull() ?: return null
                 append((((v xor mask) - shift + 256) and 255).toChar())
             }
@@ -156,7 +161,7 @@ internal object HattrickPlayers {
      */
     fun paramStream(html: String): Found? {
         val m = Regex(
-            """[?&](?:mediaUrl|videoUrl|streamUrl|url|file|src)=(https?%3A%2F%2F[^"'&\s<>]+)""",
+            """[?&](?:mediaUrl|videoUrl|streamUrl|url|file|src|link)=(https?%3A%2F%2F[^"'&\s<>]+)""",
             RegexOption.IGNORE_CASE
         ).find(html) ?: return null
         val url = percentDecode(m.groupValues[1])

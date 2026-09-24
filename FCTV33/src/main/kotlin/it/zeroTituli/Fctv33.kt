@@ -8,11 +8,12 @@ import it.zeroTituli.shared.EventTime
 import it.zeroTituli.shared.LocalProxy
 import it.zeroTituli.shared.MatchFilter
 import it.zeroTituli.shared.Pb
+import java.security.MessageDigest
 import java.util.Calendar
 import java.util.TimeZone
 
 /**
- * FCTV33 (www.fctv33hd.icu).
+ * FCTV33 (www.fctv33hd.co).
  *
  * Il sito è una SPA: partite e flussi arrivano da un'API protobuf aperta. L'm3u8 si ottiene in due
  * richieste (elenco dei canali della partita, poi dettaglio del canale) e passa dal proxy locale
@@ -20,7 +21,7 @@ import java.util.TimeZone
  * docs/superpowers/specs/2026-07-31-plugin-fctv33-design.md
  */
 class Fctv33 : MainAPI() {
-    override var mainUrl = "https://www.fctv33hd.icu"
+    override var mainUrl = "https://www.fctv33hd.co"
     override var name = "FCTV33"
     override var lang = "it"
     override val hasMainPage = true
@@ -158,7 +159,12 @@ class Fctv33 : MainAPI() {
         matchCache?.let { if (now - matchCacheTime < cacheTtlMs) return it }
 
         val bytes = app.get(
-            "$apiBase/api/match/live?sportType=$footballSportType",
+            signedUrl(
+                path = "/api/match/live",
+                code = liveListCode,
+                query = "sportType=$footballSportType&stream=true",
+                paramsJson = """{"sportType":$footballSportType,"stream":true}"""
+            ),
             headers = mapOf("User-Agent" to ua),
             referer = "$mainUrl/"
         ).body.bytes()
@@ -172,6 +178,31 @@ class Fctv33 : MainAPI() {
         matchCache = parsed
         matchCacheTime = now
         return parsed
+    }
+
+    /**
+     * Dal 09/2026 `/api/match/live` senza firma riceve la challenge "managed" di Cloudflare. Il sito
+     * chiede prima a `/api/common/bs?code=…` una firma (risposta `10.1`: `1` codice, `2` firma) e la
+     * mette in testa al percorso: `/sfver` + i primi 6 caratteri dell'md5 del JSON dei parametri
+     * + la firma. Il JSON deve avere le stesse chiavi, nello stesso ordine, della query.
+     */
+    private val liveListCode = 100L
+
+    private suspend fun signedUrl(path: String, code: Long, query: String, paramsJson: String): String {
+        val signature = runCatching {
+            val body = Pb.parse(
+                app.get(
+                    "$apiBase/api/common/bs?code=$code&$query",
+                    headers = mapOf("User-Agent" to ua),
+                    referer = "$mainUrl/"
+                ).body.bytes()
+            ).message(10)
+            body?.messages(1)?.firstOrNull { it.long(1) == code }?.string(2)
+        }.getOrNull()
+        if (signature.isNullOrBlank()) return "$apiBase$path?$query"
+        val hash = MessageDigest.getInstance("MD5").digest(paramsJson.toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(6)
+        return "$apiBase/sfver$hash$signature$path?$query"
     }
 
     /**
@@ -220,6 +251,7 @@ class Fctv33 : MainAPI() {
      * ROT47. Se la richiesta non riesce si usa la lista cucinata qui, aggiornata a mano.
      */
     private val fallbackPlayerDomains = listOf(
+        "https://jack39eo.mpgreatestclgczbmiddle.my",
         "https://jack29eo.mpgreatestclgczbmiddle.my",
         "https://nadia59bc.mp77g69ainei3gx2voxygen.ru",
         "https://morgan33cg.006hndchurch05g7ifbreathing.sbs"

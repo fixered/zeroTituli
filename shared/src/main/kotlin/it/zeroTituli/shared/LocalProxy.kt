@@ -274,22 +274,53 @@ object LocalProxy {
             writeText(out, 502, "text/plain", "upstream error")
             return
         }
-        runCatching {
-            val status = conn.responseCode
-            val stream: InputStream = if (status >= 400) conn.errorStream ?: return@runCatching
-            else conn.inputStream
-
-            val extra = mutableListOf<String>()
-            conn.getHeaderField("Content-Type")?.let { extra += "Content-Type: $it" }
-            conn.getHeaderField("Content-Length")?.let { extra += "Content-Length: $it" }
-            conn.getHeaderField("Content-Range")?.let { extra += "Content-Range: $it" }
-            extra += "Accept-Ranges: bytes"
-
-            writeHead(out, status, extra)
-            stream.copyTo(out, 64 * 1024)
-            out.flush()
-        }
+        runCatching { forward(out, conn, conn.responseCode, range) }
         conn.disconnect()
+    }
+
+    /**
+     * Inoltra il corpo così com'è, salvo i segmenti travestiti da immagine ([Disguise]): a quelli
+     * si toglie l'intestazione finta. Solo con le richieste intere, perché su una a pezzi i byte
+     * in testa non sono l'inizio del file.
+     */
+    private fun forward(out: OutputStream, conn: HttpURLConnection, status: Int, range: String?) {
+        val stream: InputStream = if (status >= 400) conn.errorStream ?: return else conn.inputStream
+        var contentType = conn.getHeaderField("Content-Type")
+        var length = conn.getHeaderField("Content-Length")?.toLongOrNull()
+        var head = ByteArray(0)
+        var skip = 0
+
+        if (status < 400 && range == null && contentType?.startsWith("image/", ignoreCase = true) == true) {
+            head = stream.readNBytesCompat(Disguise.PEEK)
+            Disguise.tsOffset(head)?.let { offset ->
+                skip = offset
+                contentType = "video/mp2t"
+                length = length?.minus(offset)
+            }
+        }
+
+        val extra = mutableListOf<String>()
+        contentType?.takeIf { it.isNotBlank() }?.let { extra += "Content-Type: $it" }
+        length?.let { extra += "Content-Length: $it" }
+        conn.getHeaderField("Content-Range")?.let { extra += "Content-Range: $it" }
+        extra += "Accept-Ranges: bytes"
+
+        writeHead(out, status, extra)
+        if (head.size > skip) out.write(head, skip, head.size - skip)
+        stream.copyTo(out, 64 * 1024)
+        out.flush()
+    }
+
+    /** `InputStream.readNBytes` c'è solo da Java 11 / Android 13: qui serve anche prima. */
+    private fun InputStream.readNBytesCompat(n: Int): ByteArray {
+        val buf = ByteArray(n)
+        var read = 0
+        while (read < n) {
+            val r = read(buf, read, n - read)
+            if (r < 0) break
+            read += r
+        }
+        return if (read == n) buf else buf.copyOf(read)
     }
 
     // ============= DIRETTE CON INDIRIZZO A SCADENZA =============
@@ -336,16 +367,7 @@ object LocalProxy {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
                 writeManifest(out, live, target, body)
             } else {
-                val stream: InputStream =
-                    if (status >= 400) conn.errorStream ?: return@runCatching else conn.inputStream
-                val extra = mutableListOf<String>()
-                contentType.takeIf { it.isNotBlank() }?.let { extra += "Content-Type: $it" }
-                conn.getHeaderField("Content-Length")?.let { extra += "Content-Length: $it" }
-                conn.getHeaderField("Content-Range")?.let { extra += "Content-Range: $it" }
-                extra += "Accept-Ranges: bytes"
-                writeHead(out, status, extra)
-                stream.copyTo(out, 64 * 1024)
-                out.flush()
+                forward(out, conn, status, range)
             }
         }
         conn.disconnect()
@@ -496,6 +518,45 @@ object LocalProxy {
         206 -> "Partial Content"
         404 -> "Not Found"
         else -> if (status < 400) "OK" else "Error"
+    }
+}
+
+/**
+ * Segmenti MPEG-TS travestiti da immagine.
+ *
+ * Alcuni player (exmxbxe.cfd, via Hattrick) caricano i segmenti su un CDN di immagini: il corpo è
+ * un TS preceduto da qualche decina di byte di intestazione finta (`RIFF…WEBP`, PNG) e arriva con
+ * `Content-Type: image/webp`. hls.js cerca da solo il byte di sincronia, ExoPlayer no: il proxy
+ * toglie l'intestazione e rimette il tipo giusto.
+ */
+object Disguise {
+
+    private const val TS_PACKET = 188
+    private const val SYNC = 0x47
+
+    /** Quanti byte leggere in anticipo: bastano per l'intestazione e tre pacchetti. */
+    const val PEEK = 1024
+
+    /**
+     * @return quanti byte scartare in testa a [head] (0 se il corpo è già un TS), oppure null se
+     *   non è un TS: in quel caso si inoltra com'è.
+     */
+    fun tsOffset(head: ByteArray, length: Int = head.size): Int? {
+        if (length > 0 && isTsAt(head, length, 0)) return 0
+        val limit = minOf(length, PEEK) - 2 * TS_PACKET
+        for (i in 1 until limit) {
+            if (isTsAt(head, length, i)) return i
+        }
+        return null
+    }
+
+    private fun isTsAt(head: ByteArray, length: Int, at: Int): Boolean {
+        for (k in 0..2) {
+            val pos = at + k * TS_PACKET
+            if (pos >= length) return k > 0
+            if (head[pos].toInt() and 0xFF != SYNC) return false
+        }
+        return true
     }
 }
 

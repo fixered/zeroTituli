@@ -6,7 +6,7 @@ rootProject.name = "CloudstreamPlugins"
 include(
     "Hattrick",
     "FCTV33",
-    "FCTV33Basket",
     "StreamingCommunity",
-    "MediasetInfinity"
+    "MediasetInfinity",
+    "AnimeUnity"
 )

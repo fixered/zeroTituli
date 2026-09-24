@@ -23,7 +23,7 @@ class Hattrick : MainAPI() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36"
 
     /** Sito di partenza dei canali "premium", da cui si recuperano quelli con il player morto. */
-    private val daddyLiveUrl = "https://dlhd.st"
+    private val daddyLiveUrl = "https://dlive.sx"
 
     private val retryDelayMs = 400L
 

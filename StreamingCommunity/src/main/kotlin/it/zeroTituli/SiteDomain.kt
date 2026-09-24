@@ -7,7 +7,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.jsoup.Jsoup
 
 /**
- * Il sito cambia dominio ogni pochi giorni (streamingcommunityz.vin → .team → .town → .support):
+ * Il sito cambia dominio ogni pochi giorni (streamingcommunityz.vin → .team → .town → .support → .photos):
  * gli operatori bloccano quello in uso e ne viene acceso un altro. Chiedere il nuovo indirizzo
  * all'utente a ogni giro è la cosa che rompe di più, quindi lo si cerca da soli.
  *
@@ -17,22 +17,25 @@ import org.jsoup.Jsoup
  *
  *  - i domini bloccati non vengono spenti, rispondono `301` verso quello nuovo (verificato su
  *    `.vin`, `.team` e `.town`, che portano tutti a `.support`);
- *  - `auth_url` (`streamingunity.cc`) è l'host del login, non quello dello streaming: viene
- *    bloccato molto più di rado e dichiara comunque l'`app_url` corrente.
+ *  - `auth_url` (`streamingunity.win`, prima `.cc`) viene bloccato molto più di rado, dichiara
+ *    comunque l'`app_url` corrente e dal 09/2026 è una copia completa del sito: se il dominio
+ *    dichiarato non risponde si usa lui.
  *
  * Gli annunci sul canale Telegram sono la stessa informazione ma non sono leggibili da qui: il
  * canale è a inviti, quindi niente `t.me/s/...` da scaricare.
  */
 object SiteDomain {
 
-    const val DEFAULT_ROOT = "https://streamingcommunityz.support/"
-    const val DEFAULT_CDN = "https://cdn.streamingcommunityz.support"
+    const val DEFAULT_ROOT = "https://streamingcommunityz.photos/"
+    const val DEFAULT_CDN = "https://cdn.streamingcommunityz.photos"
 
     /**
-     * Domini da cui partire, in ordine di probabilità. `streamingunity.cc` sta in alto apposta:
-     * regge più a lungo degli altri e serve solo a farsi dire qual è l'indirizzo buono.
+     * Domini da cui partire, in ordine di probabilità. `streamingunity.*` sta in alto apposta:
+     * regge più a lungo degli altri e dichiara comunque qual è l'indirizzo buono.
      */
     private val seeds = listOf(
+        "streamingcommunityz.photos",
+        "streamingunity.win",
         "streamingcommunityz.support",
         "streamingunity.cc",
         "streamingcommunityz.town",
@@ -135,12 +138,15 @@ object SiteDomain {
         }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
 
         val declared = appUrlRegex.find(props)?.groupValues?.getOrNull(1)?.let { normalize(it) }
-        // Senza dichiarazione vale l'indirizzo finale: i domini bloccati reindirizzano al nuovo.
-        val root = declared ?: normalize(response.url) ?: return null
+        // L'indirizzo finale, dopo i reindirizzamenti: i domini bloccati rimandano al nuovo.
+        val reached = normalize(response.url) ?: return null
 
-        if (hostOf(root) != hostOf(url) && declared != null) {
-            probe(root, hop + 1)?.let { return it }
+        if (declared != null && hostOf(declared) != hostOf(reached)) {
+            probe(declared, hop + 1)?.let { return it }
         }
+        // Se il dominio dichiarato non risponde (l'operatore l'ha già bloccato nei DNS) si resta su
+        // quello raggiunto: `streamingunity.win` è una copia completa del sito, non solo il login.
+        val root = reached
 
         val cdn = cdnUrlRegex.find(props)?.groupValues?.getOrNull(1)
             ?.trimEnd('/')

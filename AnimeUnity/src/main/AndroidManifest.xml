@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AGP 8 non ammette più `package`: il namespace (it.dogior.hadEnough, quello del codice
+     originale di doGior) lo imposta AnimeUnity/build.gradle.kts. -->
+<manifest />
